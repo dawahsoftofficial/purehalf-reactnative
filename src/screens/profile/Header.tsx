@@ -1001,17 +1001,13 @@ const Header = ({
                   style={Styles.strengthPct}
                 >{` ${profileStrength}%`}</ReactText>
               </ReactText>
+              <GiftBadge
+                eligible={giftEligible}
+                claimed={giftClaimed}
+                onPress={onGiftBadgePress}
+              />
             </View>
             <View style={Styles.strengthTrackWrap}>
-              <View
-                style={[Styles.giftAboveBar, Rtl ? { left: 0 } : { right: 0 }]}
-              >
-                <GiftBadge
-                  eligible={giftEligible}
-                  claimed={giftClaimed}
-                  onPress={onGiftBadgePress}
-                />
-              </View>
               <View style={Styles.strengthTrack}>
                 <View
                   style={[
@@ -1367,7 +1363,8 @@ const Styles = StyleSheet.create({
   strengthRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: hp(1.6),
+    justifyContent: 'space-between',
+    marginBottom: hp(1),
   },
   strengthLabel: {
     color: Colors.muted,
@@ -1383,11 +1380,6 @@ const Styles = StyleSheet.create({
   },
   strengthTrackWrap: {
     position: 'relative',
-  },
-  giftAboveBar: {
-    position: 'absolute',
-    bottom: hp(1.4),
-    zIndex: 1,
   },
   strengthTrack: {
     height: hp(0.85),

@@ -15,7 +15,7 @@ const PolygamyBadge = () => (
   <View style={Styles.wrap}>
     <View style={Styles.pill}>
       <Ionicons name="people-outline" size={wp(4)} color={Colors.primary} />
-      <Text style={Styles.txt}>Open to another marriage</Text>
+      <Text style={Styles.txt}>Open to second marriage</Text>
     </View>
   </View>
 );
@@ -24,10 +24,9 @@ export default PolygamyBadge;
 
 const Styles = StyleSheet.create({
   wrap: {
-    paddingHorizontal: wp(4),
+    marginHorizontal: wp(4),
     marginTop: hp(1.2),
-    marginBottom: hp(0.4),
-    alignItems: 'flex-start',
+    marginBottom: hp(2),
   },
   pill: {
     flexDirection: 'row',
@@ -36,9 +35,9 @@ const Styles = StyleSheet.create({
     backgroundColor: Colors.lavender,
     borderColor: Colors.primary,
     borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: wp(3.5),
-    paddingVertical: hp(0.8),
+    borderRadius: 12,
+    paddingHorizontal: wp(4),
+    paddingVertical: hp(1.2),
   },
   txt: {
     color: Colors.primary,

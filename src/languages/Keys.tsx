@@ -203,6 +203,7 @@ const Keys = {
   likes: 'likes',
   disLikes: 'disLikes',
   openForPolygamy: 'openForPolygamy',
+  availableForSecondMarriage: 'availableForSecondMarriage',
   children: 'children',
   drinking: 'drinking',
   car: 'car',

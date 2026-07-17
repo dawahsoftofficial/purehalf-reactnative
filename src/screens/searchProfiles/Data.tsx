@@ -359,6 +359,24 @@ const filtersData = [
     category: 'registeredAt',
     apiKey: 'register_at',
   },
+  // Gents-only premium filter: surfaces candidates who marked themselves open
+  // to polygamy (available as a second wife). A single "Yes" chip acts as a
+  // toggle — selecting sends open_for_polygamy=1; the Clear link removes it.
+  // Gated to male users in RefineSearch (premium list + hide-for-female).
+  {
+    id: 'open_for_polygamy',
+    title: LanguageKeys.availableForSecondMarriage,
+    data: [
+      {
+        id: 1,
+        value: LanguageKeys.yes,
+        selected: false,
+      },
+    ],
+    selected: {},
+    apiKey: 'open_for_polygamy',
+    type: 'radioButton',
+  },
 ];
 
 export { filtersData };

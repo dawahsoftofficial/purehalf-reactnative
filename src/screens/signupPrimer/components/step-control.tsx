@@ -147,11 +147,6 @@ function StepControl({ step, value, onChange, onAdvance }: Props) {
       }
       return (
         <View style={Styles.list}>
-          {step.max != null ? (
-            <RNText style={Styles.counter}>
-              {`${selected.length} / ${step.max} selected`}
-            </RNText>
-          ) : null}
           {opts.map((op) => (
             <Row
               key={op.id}
@@ -455,16 +450,6 @@ const Styles = StyleSheet.create({
     fontSize: Typography.small1,
   },
   chipTxtOn: { color: Colors.color2 },
-  counter: {
-    alignSelf: 'flex-end',
-    color: Colors.primary,
-    fontFamily: Fonts.APPFONT_SB,
-    fontSize: Typography.tiny1,
-    backgroundColor: Colors.lavender,
-    borderRadius: 999,
-    paddingHorizontal: wp(2.5),
-    paddingVertical: hp(0.3),
-  },
   subLabel: {
     color: Colors.muted,
     fontFamily: Fonts.APPFONT_SB,

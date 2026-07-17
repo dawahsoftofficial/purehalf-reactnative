@@ -73,7 +73,12 @@ export const InterestsPreview = memo(function InterestsPreview({
           <Ionicons name="happy-outline" size={wp(5)} color={Colors.primary} />
         </View>
         <View style={Styles.rowText}>
-          <Text style={Styles.rowTitle}>
+          <Text
+            style={Styles.rowTitle}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.9}
+          >
             {LanguageKeys.myInterestAndHobbies}
           </Text>
           <Text style={Styles.rowPreview} numberOfLines={1}>
@@ -127,7 +132,14 @@ export const DetailSectionList = memo(function DetailSectionList({
               <Ionicons name={g.icon} size={wp(5)} color={Colors.primary} />
             </View>
             <View style={Styles.rowText}>
-              <Text style={Styles.rowTitle}>{g.title}</Text>
+              <Text
+                style={Styles.rowTitle}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.9}
+              >
+                {g.title}
+              </Text>
               <Text style={Styles.rowPreview} numberOfLines={1}>
                 {preview.length > 0 ? preview : LanguageKeys.tapToAdd}
               </Text>

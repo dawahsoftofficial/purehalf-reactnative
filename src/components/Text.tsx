@@ -14,6 +14,13 @@ import { Fonts } from '../res';
 type TextProps = {
   style?: StyleProp<TextStyle>;
   numberOfLines?: number;
+  /**
+   * Shrinks the text to fit within `numberOfLines` before wrapping/truncating —
+   * used for long single-line labels (e.g. profile section titles) that must
+   * not wrap. Only applied to single-string children.
+   */
+  adjustsFontSizeToFit?: boolean;
+  minimumFontScale?: number;
   testID?: string;
   containerStyle?: StyleProp<ViewStyle>;
   /**
@@ -27,8 +34,16 @@ type TextProps = {
 const Text = React.memo((props: TextProps) => {
   const { t } = useTranslation();
   const Rtl = CheckRtl();
-  const { style, numberOfLines, testID, containerStyle, variant, children } =
-    props;
+  const {
+    style,
+    numberOfLines,
+    adjustsFontSizeToFit,
+    minimumFontScale,
+    testID,
+    containerStyle,
+    variant,
+    children,
+  } = props;
 
   const textStyle = useMemo<StyleProp<TextStyle>>(() => {
     const alignSelf: TextStyle = {
@@ -45,7 +60,13 @@ const Text = React.memo((props: TextProps) => {
   // Handle string children
   if (typeof children === 'string') {
     return (
-      <RNText style={textStyle} numberOfLines={numberOfLines} testID={testID}>
+      <RNText
+        style={textStyle}
+        numberOfLines={numberOfLines}
+        adjustsFontSizeToFit={adjustsFontSizeToFit}
+        minimumFontScale={minimumFontScale}
+        testID={testID}
+      >
         {t(children)}
       </RNText>
     );

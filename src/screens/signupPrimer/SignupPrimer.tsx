@@ -415,9 +415,23 @@ const SignupPrimer = ({ navigation }: any) => {
       >
         <RNText style={Styles.qTitle}>{current.question}</RNText>
         {current.subtitle ? (
-          <RNText style={Styles.qSub}>{current.subtitle}</RNText>
+          current.max != null ? (
+            <View style={Styles.subRow}>
+              <RNText style={Styles.qSubInline}>{current.subtitle}</RNText>
+              <RNText style={Styles.inlineCounter}>
+                {`${Array.isArray(value) ? value.length : 0} / ${current.max} selected`}
+              </RNText>
+            </View>
+          ) : (
+            <RNText style={Styles.qSub}>{current.subtitle}</RNText>
+          )
         ) : null}
-        <View style={Styles.controlWrap}>
+        <View
+          style={[
+            Styles.controlWrap,
+            current.max != null && Styles.controlWrapTight,
+          ]}
+        >
           <StepControl
             key={current.id}
             step={current}
@@ -505,7 +519,32 @@ const Styles = StyleSheet.create({
     fontSize: Typography.small2,
     marginTop: hp(0.7),
   },
+  subRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: hp(0.7),
+  },
+  qSubInline: {
+    flex: 1,
+    marginRight: wp(2),
+    color: Colors.muted,
+    fontFamily: Fonts.APPFONT_R,
+    fontSize: Typography.small2,
+  },
+  inlineCounter: {
+    flexShrink: 0,
+    color: Colors.primary,
+    fontFamily: Fonts.APPFONT_SB,
+    fontSize: Typography.tiny1,
+    backgroundColor: Colors.lavender,
+    borderRadius: 999,
+    paddingHorizontal: wp(2.5),
+    paddingVertical: hp(0.3),
+    overflow: 'hidden',
+  },
   controlWrap: { marginTop: hp(2.5) },
+  controlWrapTight: { marginTop: hp(1) },
   supportBox: {
     marginTop: hp(2),
     backgroundColor: 'rgba(46,158,91,0.12)',

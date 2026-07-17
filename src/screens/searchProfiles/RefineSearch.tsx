@@ -60,6 +60,7 @@ const RefineSearch = React.forwardRef<RefineSearchRef, RefineSearchProps>(
       'bdy-0', // Body Type
       'eye-0', // Eye Color
       'skin-0', // Complexion
+      'open_for_polygamy', // Available for second marriage (gents only)
       'last_online_at', // Last Online At
       'register_at', // Registered At
     ];
@@ -800,7 +801,10 @@ const RefineSearch = React.forwardRef<RefineSearchRef, RefineSearchProps>(
       const isFemale = currentUser?.gender === 'female';
 
       // Hide filters for females
-      const hideForFemale = isFemale && item?.id === 'hijab-0'; // Hijab Level
+      const hideForFemale =
+        isFemale &&
+        (item?.id === 'hijab-0' || // Hijab Level
+          item?.id === 'open_for_polygamy'); // Second-marriage filter is gents-only
 
       // Hide filters for males
       const hideForMale =

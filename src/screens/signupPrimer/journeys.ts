@@ -1,12 +1,9 @@
-import type { PrimerAnswers } from './primer-logic';
 import type { PrimerGender, PrimerOption, PrimerStepDef } from './primer-types';
 
 // Copy is inline English here (rendered through the app Text component, which
 // runs it through t()); full localisation is the documented i18n follow-up.
 
 const o = (id: string, label: string): PrimerOption => ({ id, label });
-
-const GENEROUS_OFFERS = ['separate_home', 'continue_career', 'simple_nikah'];
 
 // Sect options mirror the two Sunni madhahib the backend stores (sect-2 Hanafi,
 // sect-1 Salafi) so a generic "Sunni" is never collapsed onto one sub-sect on a
@@ -94,14 +91,10 @@ const femaleJourney: PrimerStepDef[] = [
     support: 'Knowing what you want is a strength — choose freely.',
     options: [
       o('strong_deen', 'Strong deen & character'),
-      o('good_looking', 'Good-looking and takes care of himself'),
-      o('tall', 'Tall'),
+      o('good_looking', 'Reasonable-looking'),
       o('financially_settled', 'Financially settled'),
       o('respected_family', 'Respected family background'),
       o('well_educated', 'Well educated'),
-      o('respects_career', 'Respects my career and goals'),
-      o('kind_to_women', 'Kind to the women in his life'),
-      o('emotionally_mature', 'Emotionally mature'),
     ],
   },
   {
@@ -139,30 +132,6 @@ const femaleJourney: PrimerStepDef[] = [
       o('govt_job', 'Government job'),
       o('settled_overseas', 'Settled overseas'),
       o('no_preference', 'No preference, character first'),
-    ],
-  },
-  {
-    id: 'note',
-    control: 'text',
-    visibility: 'public',
-    question: "Anything else you'd like to add?",
-    placeholder: 'e.g. Someone honest, attentive, and family-oriented.',
-  },
-  {
-    id: 'strengths',
-    control: 'traits',
-    visibility: 'public',
-    question: "What's wonderful about you?",
-    subtitle: 'Go on, be proud — this makes your profile shine.',
-    options: [
-      o('kind_caring', 'Kind and caring'),
-      o('family_oriented', 'Family-oriented'),
-      o('well_educated', 'Well educated'),
-      o('ambitious', 'Ambitious and hardworking'),
-      o('good_humour', 'Good sense of humour'),
-      o('practising', 'Practising in my deen'),
-      o('honest_loyal', 'Honest and loyal'),
-      o('independent', 'Independent'),
     ],
   },
 ];
@@ -208,21 +177,6 @@ const maleJourney: PrimerStepDef[] = [
     options: SECT_OPTIONS,
   },
   {
-    id: 'concerns',
-    control: 'multi',
-    visibility: 'private',
-    question: "Be honest — what's been the hardest part?",
-    subtitle: 'Only you can see this.',
-    options: [
-      o('attracted', "Hard to find someone I'm genuinely attracted to"),
-      o('younger', 'Hard to find someone younger, as I hoped'),
-      o('compatible', "Haven't found someone truly compatible"),
-      o('practises', 'Hard to find someone who practises like I do'),
-      o('moving_on', 'Still moving on from a past relationship'),
-      o('time_passing', 'Worried time is passing'),
-    ],
-  },
-  {
     id: 'priorities',
     control: 'multi',
     max: 4,
@@ -236,22 +190,6 @@ const maleJourney: PrimerStepDef[] = [
       o('easy_going', 'Easy-going and fun to be with'),
       o('practising', 'Practising deen and modesty'),
       o('honest_loyal', 'Honest and loyal'),
-      o('family_oriented', 'Family-oriented'),
-      o('career_plus', 'Career-minded is a plus'),
-    ],
-  },
-  {
-    id: 'partner_openness',
-    control: 'multi',
-    visibility: 'public',
-    question: 'Her background — what are you open to?',
-    options: [
-      o('same_city', 'Same city'),
-      o('anywhere_pakistan', 'Anywhere in Pakistan'),
-      o('settled_overseas', 'Settled overseas'),
-      o('other_nationalities', 'Open to other nationalities'),
-      o('revert', 'Revert Muslim sisters'),
-      o('open_all', 'Open to all'),
     ],
   },
   {
@@ -261,56 +199,6 @@ const maleJourney: PrimerStepDef[] = [
     sliderMin: 18,
     sliderMax: 60,
     question: 'What age range are you hoping for in her?',
-  },
-  {
-    id: 'work',
-    control: 'work',
-    visibility: 'public',
-    hasIncome: true,
-    question: 'Tell us about your work',
-    options: [
-      o('business_owner', 'Business owner'),
-      o('self_employed', 'Self-employed'),
-      o('salaried', 'Salaried professional'),
-      o('govt_job', 'Government job'),
-      o('settled_overseas', 'Settled overseas'),
-    ],
-  },
-  {
-    id: 'offerings',
-    control: 'multi',
-    visibility: 'public',
-    question: 'What can you offer her?',
-    supportIf: (answers: PrimerAnswers) => {
-      const v = answers.offerings;
-      return Array.isArray(v) && v.some((x) => GENEROUS_OFFERS.includes(x));
-    },
-    support: 'The more open you are here, the better we can match you.',
-    options: [
-      o('separate_home', 'Separate home'),
-      o('joint_family', 'Living with my parents (joint family)'),
-      o('continue_career', 'She can continue her career'),
-      o('based_abroad', 'Based abroad / relocating'),
-      o('simple_nikah', 'Simple nikah, no heavy demands'),
-      o('financially_independent', 'Financially independent'),
-    ],
-  },
-  {
-    id: 'strengths',
-    control: 'traits',
-    visibility: 'public',
-    question: 'What makes you a great husband?',
-    subtitle: "Own it — this is what she'll notice first.",
-    options: [
-      o('caring_supportive', 'Caring and supportive'),
-      o('hardworking', 'Hardworking and ambitious'),
-      o('family_oriented', 'Family-oriented'),
-      o('well_educated', 'Well educated'),
-      o('good_humour', 'Good sense of humour'),
-      o('practising', 'Practising in my deen'),
-      o('honest_loyal', 'Honest and loyal'),
-      o('financially_responsible', 'Financially responsible'),
-    ],
   },
 ];
 
