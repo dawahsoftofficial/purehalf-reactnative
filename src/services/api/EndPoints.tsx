@@ -5,6 +5,7 @@ const EndPoints = {
   updateDetails: '/auth/update/detail',
   updateProfilePrivacy: '/auth/profile/privacy',
   claimProfileGift: '/auth/profile/claim-gift',
+  profilePdf: '/auth/profile/pdf',
   getLanguageList: '/auth/list/language',
   getNationalityList: '/auth/list/nationality',
   getUsers: '/auth/user/index',
