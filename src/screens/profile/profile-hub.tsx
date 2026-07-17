@@ -161,6 +161,44 @@ export const DetailSectionList = memo(function DetailSectionList({
   );
 });
 
+type SharePdfRowProps = {
+  onPress: () => void;
+};
+
+export const SharePdfRow = memo(function SharePdfRow({
+  onPress,
+}: SharePdfRowProps) {
+  return (
+    <View style={Styles.card}>
+      <Ripple onPress={onPress} style={Styles.row}>
+        <View style={Styles.iconChip}>
+          <Ionicons
+            name="document-text-outline"
+            size={wp(5)}
+            color={Colors.primary}
+          />
+        </View>
+        <View style={Styles.rowText}>
+          <Text style={Styles.rowTitle}>{LanguageKeys.shareProfilePdf}</Text>
+          <Text style={Styles.rowPreview} numberOfLines={1}>
+            {LanguageKeys.shareProfilePdfSubtitle}
+          </Text>
+        </View>
+        <View style={Styles.countPillDone}>
+          <Text style={Styles.newBadgeTxt}>
+            {LanguageKeys.sharePdfNewBadge}
+          </Text>
+        </View>
+        <Ionicons
+          name="chevron-forward"
+          size={wp(5)}
+          color={Colors.primaryLite}
+        />
+      </Ripple>
+    </View>
+  );
+});
+
 const Styles = StyleSheet.create({
   sectionLabel: {
     fontFamily: Fonts.APPFONT_SB,
@@ -266,5 +304,11 @@ const Styles = StyleSheet.create({
   },
   countTxtDone: {
     color: Colors.verified,
+  },
+  newBadgeTxt: {
+    fontFamily: Fonts.APPFONT_B,
+    fontSize: Typography.tiny1,
+    color: Colors.verified,
+    paddingHorizontal: wp(0.5),
   },
 });

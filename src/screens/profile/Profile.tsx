@@ -40,6 +40,7 @@ import {
   type GroupMeta,
   InterestsPreview,
   SectionLabel,
+  SharePdfRow,
 } from './profile-hub';
 import { type ProfileFieldVisibility } from './profile-privacy';
 import Styles from './Styles';
@@ -227,6 +228,10 @@ const Profile = ({
   const onEditInterests = useCallback(() => {
     navigation.navigate('EditInterests', { data: interestAndHobbies });
   }, [navigation, interestAndHobbies]);
+
+  const onSharePdf = useCallback(() => {
+    navigation.navigate('ProfilePdfShare');
+  }, [navigation]);
 
   const getAttribute = useCallback(
     async (Data: any, nextUserData: User) => {
@@ -601,6 +606,7 @@ const Profile = ({
                         gender={userData?.detail?.gender ?? userData?.gender}
                         onOpenGroup={onOpenGroup}
                       />
+                      <SharePdfRow onPress={onSharePdf} />
                       <View style={{ height: 28 }} />
                     </>
                   ) : userData?.profile_restricted ? (
