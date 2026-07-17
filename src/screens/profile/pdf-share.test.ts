@@ -1,3 +1,4 @@
+import LanguageKeys from '../../languages/Keys';
 import {
   buildPdfDataUrl,
   buildShareFilename,
@@ -32,12 +33,12 @@ describe('buildPdfDataUrl', () => {
 describe('previewSections', () => {
   it('lists a section once any of its fields are filled in', () => {
     const sections = previewSections({ prayers_punctuality_id: 3 });
-    expect(sections).toContain('Islamic Values');
+    expect(sections).toContain(LanguageKeys.islamicValues);
   });
 
   it('omits sections with nothing filled in', () => {
     const sections = previewSections({ prayers_punctuality_id: 3 });
-    expect(sections).not.toContain('Lifestyle');
+    expect(sections).not.toContain(LanguageKeys.lifeStyle);
   });
 
   it('returns an empty list for an undefined detail', () => {

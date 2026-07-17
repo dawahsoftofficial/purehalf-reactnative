@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
 
+import LanguageKeys from '../../languages/Keys';
 import ProfilePdfShare from './ProfilePdfShare';
 
 const mockGetProfilePdf = jest.fn().mockResolvedValue({
@@ -128,7 +129,7 @@ describe('ProfilePdfShare', () => {
 
     expect(screen.getByText('Ahmed K.')).toBeTruthy();
     expect(screen.getByText('Manchester, United Kingdom')).toBeTruthy();
-    expect(screen.getByText('Islamic Values')).toBeTruthy();
+    expect(screen.getByText(LanguageKeys.islamicValues)).toBeTruthy();
   });
 
   it('logs generated and shared analytics events with the current toggle flags', async () => {

@@ -1,3 +1,8 @@
+// Import the language-key map directly (not via the ../../languages barrel) so
+// this module stays pure/RN-free and jest-fast. The screen's <Text> translates
+// these keys via t() at render time.
+import LanguageKeys from '../../languages/Keys';
+
 const UNSAFE_FILENAME_CHARS = /[^a-zA-Z0-9-]/g;
 
 export function buildShareFilename(firstName: string | undefined): string {
@@ -19,7 +24,7 @@ export function buildPdfDataUrl(base64: string): string {
 // drives the mobile preview card's "what's going in" checklist.
 const SECTION_FIELD_GROUPS: Array<{ title: string; fields: string[] }> = [
   {
-    title: 'Islamic Values',
+    title: LanguageKeys.islamicValues,
     fields: [
       'prayers_punctuality_id',
       'islamic_practice_level_id',
@@ -30,7 +35,7 @@ const SECTION_FIELD_GROUPS: Array<{ title: string; fields: string[] }> = [
     ],
   },
   {
-    title: 'Lifestyle',
+    title: LanguageKeys.lifeStyle,
     fields: [
       'education_level_id',
       'profession_id',
@@ -46,7 +51,7 @@ const SECTION_FIELD_GROUPS: Array<{ title: string; fields: string[] }> = [
     ],
   },
   {
-    title: 'Appearance & Health',
+    title: LanguageKeys.appearanceHealth,
     fields: [
       'height',
       'body_type_id',
@@ -56,11 +61,11 @@ const SECTION_FIELD_GROUPS: Array<{ title: string; fields: string[] }> = [
     ],
   },
   {
-    title: 'Family Background',
+    title: LanguageKeys.familyBackground,
     fields: ['ethinicity_id', 'language_id', 'nationality_id'],
   },
   {
-    title: 'Future Plans',
+    title: LanguageKeys.futurePlans,
     fields: [
       'marriage_plan_id',
       'family_plan_id',
