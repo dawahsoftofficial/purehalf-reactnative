@@ -205,6 +205,7 @@ type SettingsState = {
   getEnableMatchCountReveal: () => boolean;
   getProfileIntroVideoEnabled: () => boolean;
   getProfileIntroVoiceEnabled: () => boolean;
+  getProfilePdfEnabled: () => boolean;
   getProfileCompletionGiftCredits: () => number;
   getProfileCompletionThresholdPercent: () => number;
   getMaxChatsPerDay: () => MaxChatsPerDay | null;
@@ -275,6 +276,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     return (
       state.getSettingByKey<boolean>('profile_intro_video_enabled') ?? false
     );
+  },
+  getProfilePdfEnabled: () => {
+    const state = get();
+    return state.getSettingByKey<boolean>('profile_pdf_enabled') ?? false;
   },
 
   getProfileIntroVoiceEnabled: () => {

@@ -99,3 +99,31 @@ describe('profile intro media settings', () => {
     );
   });
 });
+
+describe('getProfilePdfEnabled', () => {
+  afterEach(() => {
+    useSettingsStore.getState().clearSettings();
+  });
+
+  it('defaults to false until the server enables it', () => {
+    expect(useSettingsStore.getState().getProfilePdfEnabled()).toBe(false);
+  });
+
+  it('reads the profile_pdf_enabled switch from settings', () => {
+    useSettingsStore.getState().setSettings({
+      message: 'ok',
+      error: false,
+      code: 200,
+      results: [
+        {
+          title: 'Profile PDF Sharing',
+          key: 'profile_pdf_enabled',
+          type: 'boolean',
+          value: true,
+        },
+      ],
+    });
+
+    expect(useSettingsStore.getState().getProfilePdfEnabled()).toBe(true);
+  });
+});

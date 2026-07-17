@@ -22,6 +22,7 @@ import {
 } from '../../services';
 import messageServices from '../../services/api/message-services';
 import type { UserMedia } from '../../services/api/types/user-types';
+import { useSettingsStore } from '../../stores';
 import PolygamyBadge from './components/polygamy-badge';
 import ProfileIntroMedia from './components/profile-intro-media';
 import Header from './Header';
@@ -232,6 +233,8 @@ const Profile = ({
   const onSharePdf = useCallback(() => {
     navigation.navigate('ProfilePdfShare');
   }, [navigation]);
+
+  const profilePdfEnabled = useSettingsStore((s) => s.getProfilePdfEnabled());
 
   const getAttribute = useCallback(
     async (Data: any, nextUserData: User) => {
@@ -606,7 +609,9 @@ const Profile = ({
                         gender={userData?.detail?.gender ?? userData?.gender}
                         onOpenGroup={onOpenGroup}
                       />
-                      <SharePdfRow onPress={onSharePdf} />
+                      {profilePdfEnabled ? (
+                        <SharePdfRow onPress={onSharePdf} />
+                      ) : null}
                       <View style={{ height: 28 }} />
                     </>
                   ) : userData?.profile_restricted ? (
