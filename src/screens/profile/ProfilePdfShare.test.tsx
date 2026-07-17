@@ -72,10 +72,16 @@ jest.mock('../../components', () => {
   };
 });
 
+const mockAddAnaylatics = jest.fn();
+jest.mock('../../services/firebase/analytics', () => ({
+  addAnaylatics: (...args: unknown[]) => mockAddAnaylatics(...args),
+}));
+
 describe('ProfilePdfShare', () => {
   beforeEach(() => {
     mockGetProfilePdf.mockClear();
     mockShareOpen.mockClear();
+    mockAddAnaylatics.mockClear();
   });
 
   it('requests the PDF with both toggles off by default when Share is pressed', async () => {
@@ -123,5 +129,22 @@ describe('ProfilePdfShare', () => {
     expect(screen.getByText('Ahmed K.')).toBeTruthy();
     expect(screen.getByText('Manchester, United Kingdom')).toBeTruthy();
     expect(screen.getByText('Islamic Values')).toBeTruthy();
+  });
+
+  it('logs generated and shared analytics events with the current toggle flags', async () => {
+    render(<ProfilePdfShare navigation={{ goBack: jest.fn() }} />);
+
+    fireEvent(screen.getByTestId('toggle-include-wali'), 'onValueChange', true);
+    fireEvent.press(screen.getByTestId('share-pdf-cta'));
+
+    await screen.findByTestId('share-pdf-cta');
+    expect(mockAddAnaylatics).toHaveBeenCalledWith('profile_pdf_generated', {
+      include_photo: false,
+      include_wali: true,
+    });
+    expect(mockAddAnaylatics).toHaveBeenCalledWith('profile_pdf_shared', {
+      include_photo: false,
+      include_wali: true,
+    });
   });
 });

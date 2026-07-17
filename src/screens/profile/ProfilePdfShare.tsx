@@ -15,6 +15,7 @@ import {
   flashErrorMessage,
   useGlobalContext,
 } from '../../services';
+import { addAnaylatics } from '../../services/firebase/analytics';
 import {
   buildPdfDataUrl,
   buildShareFilename,
@@ -46,12 +47,20 @@ const ProfilePdfShare = ({ navigation }: ProfilePdfShareProps) => {
     setLoading(true);
     try {
       const result = await ApiServices.getProfilePdf(includePhoto, includeWali);
+      await addAnaylatics('profile_pdf_generated', {
+        include_photo: includePhoto,
+        include_wali: includeWali,
+      });
       await Share.open({
         url: buildPdfDataUrl(result.pdf_base64),
         filename:
           result.filename ?? buildShareFilename(currentUser?.first_name),
         useInternalStorage: true,
         failOnCancel: false,
+      });
+      await addAnaylatics('profile_pdf_shared', {
+        include_photo: includePhoto,
+        include_wali: includeWali,
       });
     } catch {
       flashErrorMessage(LanguageKeys.sharePdfFailed);
