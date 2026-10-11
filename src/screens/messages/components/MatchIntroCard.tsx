@@ -11,7 +11,8 @@ import { capitalizeName } from '../../../services';
 interface MatchIntroCardProps {
   otherUserData: any;
   isBlockedYou: boolean;
-  onViewProfilePress: () => void;
+  /** Omit to hide the button (e.g. the member's account is gone). */
+  onViewProfilePress?: () => void;
   /**
    * Localized advice string in the "quote | source" format. When provided,
    * it renders inside the panel below a hairline divider.
@@ -65,13 +66,15 @@ const MatchIntroCard = ({
           {metaParts.join(' · ')}
         </Text>
       )}
-      <Ripple
-        style={Styles.viewProfileBtn}
-        rippleColor={Colors.whiteRGBA30}
-        onPress={onViewProfilePress}
-      >
-        <Text style={Styles.viewProfileText}>{t('viewProfile')}</Text>
-      </Ripple>
+      {onViewProfilePress ? (
+        <Ripple
+          style={Styles.viewProfileBtn}
+          rippleColor={Colors.whiteRGBA30}
+          onPress={onViewProfilePress}
+        >
+          <Text style={Styles.viewProfileText}>{t('viewProfile')}</Text>
+        </Ripple>
+      ) : null}
       {!!quoteText?.trim() && (
         <View style={Styles.quoteSection}>
           <Text style={Styles.quoteText}>{quoteText.trim()}</Text>

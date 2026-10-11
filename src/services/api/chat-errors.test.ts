@@ -50,10 +50,32 @@ describe('toChatApiError', () => {
     expect(err.status).toBe(429);
   });
 
-  it('maps a missing response to NETWORK', () => {
+  it('maps an axios error with no response to NETWORK', () => {
     const err = toChatApiError(axiosError(undefined));
     expect(err.code).toBe('NETWORK');
     expect(err.status).toBeUndefined();
+  });
+
+  it.each(['ECONNABORTED', 'ERR_NETWORK', 'ETIMEDOUT'])(
+    'maps a %s error code without isAxiosError to NETWORK',
+    (code) => {
+      const err = toChatApiError({ code, message: 'x' });
+      expect(err.code).toBe('NETWORK');
+    }
+  );
+
+  it('does not treat a JS TypeError as a network failure', () => {
+    const err = toChatApiError(new TypeError("Cannot read property 'a'"));
+    expect(err.code).toBe('UNKNOWN');
+  });
+
+  it('does not treat a cancellation as a network failure', () => {
+    const err = toChatApiError({
+      isAxiosError: true,
+      code: 'ERR_CANCELED',
+      message: 'canceled',
+    });
+    expect(err.code).toBe('UNKNOWN');
   });
 
   it('maps the legacy credits text to NO_CHAT_CREDITS', () => {

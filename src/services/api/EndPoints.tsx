@@ -45,6 +45,8 @@ const EndPoints = {
   // Message/Conversation endpoints
   startConversation: '/auth/conversations/start',
   getConversationsList: '/auth/conversations/list',
+  getConversationWithUser: (userId: number | string) =>
+    `/auth/conversations/with/${userId}`,
   getConversationMessages: (conversationId: number) =>
     `/auth/conversations/${conversationId}/messages`,
   sendConversationMessage: (conversationId: number) =>

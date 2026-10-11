@@ -15,6 +15,8 @@ export type Participant = {
   last_seen_at: string | null;
   last_read_message_id: number | null;
   unread_count: number;
+  /** True when the member's account is gone (name/image come from a snapshot). */
+  is_deleted?: boolean;
 };
 
 /**
@@ -86,6 +88,17 @@ export type StartConversationResponse = {
   error: boolean;
   code: number;
   results: Conversation;
+};
+
+/**
+ * Get Conversation With User Response
+ * `results` is null when the caller has no private conversation with the member.
+ */
+export type GetConversationWithUserResponse = {
+  message: string;
+  error: boolean;
+  code: number;
+  results: Conversation | null;
 };
 
 /**

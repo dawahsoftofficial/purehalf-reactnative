@@ -1,5 +1,11 @@
 import { useFocusEffect } from '@react-navigation/native';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
@@ -32,6 +38,7 @@ import {
 } from '../../services';
 import messageServices from '../../services/api/message-services';
 import type {
+  Conversation,
   Message,
   MessageDeliveredEventData,
   MessageReadEventData,
@@ -39,6 +46,7 @@ import type {
   ParticipantBlockedEventData,
 } from '../../services/api/types/message-types';
 import chatAudioService from '../../services/audio/chat-audio-service';
+import { chatErrorMessageKey } from './chat-error-messages';
 import type { AudioBubblePlayback } from './components/AudioMessageBubble';
 import IcebreakerChips from './components/IcebreakerChips';
 import MatchIntroCard from './components/MatchIntroCard';
@@ -47,6 +55,14 @@ import NotificationPermissionBanner from './components/notification-permission-b
 import TypingIndicator from './components/TypingIndicator';
 import VoiceRecorderBar from './components/VoiceRecorderBar';
 import { useSendMessage } from './hooks/useSendMessage';
+import {
+  getOtherParticipant,
+  hasHeaderFields,
+  initialOtherUser,
+  isChatPartnerDeleted,
+  mergeChatPartner,
+  resolveChatEntry,
+} from './SingleChat.routing';
 import Styles from './SingleChat.styles';
 import SingleChatHeader from './SingleChatHeader';
 
@@ -78,13 +94,37 @@ const SingleChat = (props: any) => {
   const inputRef: any = useRef(null);
   const { t }: any = useTranslation();
   const { currentUser } = useGlobalContext();
-  const fromNotification =
-    props?.route?.params?.from === 'notification' ? true : false;
-  const fromMessages = props?.route?.params?.from === 'messages' ? true : false;
   const guardian = currentUser?.guardian ? currentUser?.guardian : false;
-  const [otherUserData, setOtherUserData] = useState(
-    props?.route?.params?.otherUserData
+  const routeParams = props?.route?.params;
+  // The screen can be opened with {conversationData|convDetails}, {conversationId}
+  // or {userId}; normalise once so there is a single resolution path.
+  const chatEntry = useMemo(() => resolveChatEntry(routeParams), [routeParams]);
+  const chatEntryRef = useRef(chatEntry);
+  chatEntryRef.current = chatEntry;
+  const routeParamsRef = useRef(routeParams);
+  routeParamsRef.current = routeParams;
+  const entryKey =
+    chatEntry.kind === 'conversation'
+      ? `c:${chatEntry.conversation.id}`
+      : chatEntry.kind === 'conversationId'
+        ? `c:${chatEntry.conversationId}`
+        : chatEntry.kind === 'user'
+          ? `u:${chatEntry.userId}`
+          : 'empty';
+  const currentUserIdRef = useRef(currentUser?.id);
+  currentUserIdRef.current = currentUser?.id;
+  const [otherUserData, setOtherUserData] = useState<any>(() =>
+    initialOtherUser(routeParams)
   );
+  // False until the real conversation (or its absence) is known; sending is
+  // held until then so a first message can't race the lookup.
+  const [resolved, setResolved] = useState(false);
+  const [loadError, setLoadError] = useState<'resolve' | 'messages' | null>(
+    null
+  );
+  const [resolveAttempt, setResolveAttempt] = useState(0);
+  const lastEntryKeyRef = useRef<string | null>(null);
+  const detailFetchedForRef = useRef<number | string | null>(null);
   const [isBlockedByYou, _setIsBlockedByYou] = useState(false);
   const [isBlockedYou, setIsBlockedYou] = useState(false);
   const [isUnblocking, setIsUnblocking] = useState(false);
@@ -163,63 +203,149 @@ const SingleChat = (props: any) => {
     };
   }, []);
 
-  const getOtherUserData = async () => {
-    ApiServices.getUserDetail(otherUserData?.id).then((res: any) => {
-      setOtherUserData((prev: any) => ({
-        ...prev,
-        ...res,
-      }));
-    });
-  };
+  const applyConversation = useCallback((conversation: Conversation) => {
+    const me = currentUserIdRef.current;
+    const meKey = me != null ? String(me) : null;
+    const participants = conversation.participants ?? [];
+    const myParticipant = participants.find((p) => String(p.id) === meKey);
+    const otherParticipant = getOtherParticipant(conversation, me);
 
-  useEffect(() => {
-    if ((fromMessages || fromNotification) && otherUserData?.type === 'User') {
-      getOtherUserData();
-    } else if (fromMessages) {
-      setLoader(false);
-    } else if (fromNotification) {
-      setLoader(false);
+    setConversationData(conversation);
+    setConversationId(String(conversation.id));
+
+    // The pivot `is_blocked` flag lives on the row of the participant who is
+    // blocked (i.e. cannot send). So:
+    //   - my own row blocked      => the other user blocked me => isBlockedYou
+    //   - the other's row blocked => I blocked the other user  => isBlockedByYou
+    setIsBlockedYou(!!myParticipant?.is_blocked);
+    _setIsBlockedByYou(!!otherParticipant?.is_blocked);
+
+    if (otherParticipant) {
+      setOtherUserData((previous: any) =>
+        mergeChatPartner(previous, otherParticipant)
+      );
     }
-  }, [fromMessages, fromNotification, otherUserData?.type]);
+  }, []);
 
+  // Resolve which conversation this screen shows. Every branch ends with the
+  // loader cleared (directly, or by fetchMessages) or an error state with a
+  // retry -- never an endless spinner.
   useEffect(() => {
-    const routeConversationData = props?.route?.params?.conversationData;
-    if (routeConversationData) {
-      // New API structure (Conversation type)
-      if (routeConversationData.id) {
-        setConversationData(routeConversationData);
-        setConversationId(routeConversationData.id.toString());
+    let cancelled = false;
 
-        // Check blocked status from participants.
-        //
-        // The pivot `is_blocked` flag lives on the row of the participant who
-        // is blocked (i.e. cannot send). So:
-        //   - my own row blocked   => the other user blocked me  => isBlockedYou
-        //   - the other's row blocked => I blocked the other user => isBlockedByYou
-        // The previous code read the other participant's flag into isBlockedYou
-        // (inverted) and never initialised isBlockedByYou from the server.
-        const currentUserId = currentUser?.id;
-        const myParticipant = routeConversationData.participants.find(
-          (p: any) => p.id === currentUserId
-        );
-        const otherParticipant = routeConversationData.participants.find(
-          (p: any) => p.id !== currentUserId
-        );
-        setIsBlockedYou(!!myParticipant?.is_blocked);
-        _setIsBlockedByYou(!!otherParticipant?.is_blocked);
+    if (
+      lastEntryKeyRef.current !== null &&
+      lastEntryKeyRef.current !== entryKey
+    ) {
+      // Same screen instance re-targeted at another chat (params replaced).
+      messagesRef.current = [];
+      setMessages([]);
+      setConversationData({});
+      setConversationId('');
+      setIsBlockedYou(false);
+      _setIsBlockedByYou(false);
+      setOtherUserData(initialOtherUser(routeParamsRef.current));
+    }
+    lastEntryKeyRef.current = entryKey;
 
-        // Keep loader true - it will be set to false after messages are fetched
-        // Don't set loader to false here, wait for fetchMessages to complete
+    setLoadError(null);
+    setResolved(false);
+    setLoader(true);
+
+    const entry = chatEntryRef.current;
+
+    const resolveByUser = async (userId: number) => {
+      try {
+        const conversation =
+          await messageServices.getConversationWithUser(userId);
+        if (cancelled) return;
+        if (conversation) {
+          // The conversationId effect fetches messages and clears the loader.
+          applyConversation(conversation);
+        } else {
+          // Brand-new chat: the first send creates it.
+          setConversationData({});
+          setConversationId('');
+          setLoader(false);
+        }
+        setResolved(true);
+      } catch (error: unknown) {
+        if (cancelled) return;
+        console.error('[SingleChat] Failed to resolve conversation:', error);
+        setLoadError('resolve');
+        setLoader(false);
       }
-    } else if (!fromNotification) {
-      setLoader(false);
+    };
+
+    const resolveById = async (id: string, userId: number | null) => {
+      // Messages load right away; the lookup only enriches the participants
+      // (block flags, deleted partner) and is best-effort.
+      setConversationId(id);
+      if (userId !== null) {
+        try {
+          const conversation =
+            await messageServices.getConversationWithUser(userId);
+          if (cancelled) return;
+          if (conversation && String(conversation.id) === id) {
+            applyConversation(conversation);
+          }
+        } catch (error: unknown) {
+          console.error('[SingleChat] Participant lookup failed:', error);
+        }
+      }
+      if (!cancelled) setResolved(true);
+    };
+
+    switch (entry.kind) {
+      case 'conversation':
+        applyConversation(entry.conversation);
+        setResolved(true);
+        break;
+      case 'conversationId':
+        void resolveById(entry.conversationId, entry.userId);
+        break;
+      case 'user':
+        void resolveByUser(entry.userId);
+        break;
+      default:
+        setLoadError('resolve');
+        setLoader(false);
     }
-  }, [
-    props?.route?.params?.conversationData,
-    currentUser,
+
+    return () => {
+      cancelled = true;
+    };
+  }, [entryKey, resolveAttempt, applyConversation]);
+
+  const isPartnerDeleted = isChatPartnerDeleted(
     otherUserData,
-    fromNotification,
-  ]);
+    conversationData,
+    currentUser?.id
+  );
+
+  // getUserDetail records a profile "visit" server-side, so only call it for
+  // a live member and only when the header lacks name/image.
+  useEffect(() => {
+    const partnerId = otherUserData?.id;
+    if (!resolved || !partnerId || isPartnerDeleted) return;
+    if (otherUserData?.type && otherUserData.type !== 'User') return;
+    if (hasHeaderFields(otherUserData)) return;
+    if (detailFetchedForRef.current === partnerId) return;
+    detailFetchedForRef.current = partnerId;
+
+    ApiServices.getUserDetail(partnerId)
+      .then((res: any) => {
+        setOtherUserData((previous: any) => ({
+          ...previous,
+          ...res,
+          name: res?.name ?? res?.full_name ?? previous?.name,
+          image: res?.image ?? res?.primary_image_to_show ?? previous?.image,
+        }));
+      })
+      .catch((error: unknown) => {
+        console.error('[SingleChat] Failed to load member details:', error);
+      });
+  }, [resolved, otherUserData, isPartnerDeleted]);
 
   const fetchMessages = useCallback(async () => {
     if (!conversationId) return;
@@ -232,6 +358,7 @@ const SingleChat = (props: any) => {
 
     // Set loader to true when starting to fetch messages
     setLoader(true);
+    setLoadError(null);
     isFetchingMessagesRef.current = true;
 
     try {
@@ -298,6 +425,10 @@ const SingleChat = (props: any) => {
       markedAsDeliveredRef.current.clear();
     } catch (error: unknown) {
       console.error('[SingleChat.fetchMessages] Error:', error);
+      // Don't present a failed load as an empty chat.
+      if (messagesRef.current.length === 0) {
+        setLoadError('messages');
+      }
       setLoader(false);
       isFetchingMessagesRef.current = false;
     }
@@ -1289,6 +1420,14 @@ const SingleChat = (props: any) => {
     props.navigation.navigate('UserProfile', { userData: otherUserData });
   };
 
+  const onRetryLoad = () => {
+    if (conversationId) {
+      void fetchMessages();
+    } else {
+      setResolveAttempt((attempt) => attempt + 1);
+    }
+  };
+
   const onIcebreakerSelect = (text: string) => {
     setInputMessage(text);
     inputRef.current?.focus();
@@ -1297,19 +1436,25 @@ const SingleChat = (props: any) => {
   // Offer greeting suggestions only before the very first message — never
   // once any chat history exists. The intro panel follows the same rule.
   const showIcebreakers =
-    !loader && messages.length === 0 && !isBlockedYou && !isBlockedByYou;
+    !loader &&
+    !loadError &&
+    resolved &&
+    messages.length === 0 &&
+    !isBlockedYou &&
+    !isBlockedByYou &&
+    !isPartnerDeleted;
 
   const renderThreadIntro = () => (
     <MatchIntroCard
       otherUserData={otherUserData}
       isBlockedYou={isBlockedYou}
-      onViewProfilePress={onViewProfilePress}
+      onViewProfilePress={isPartnerDeleted ? undefined : onViewProfilePress}
       quote={quote || undefined}
     />
   );
 
   const handleSubmitEditing = async () => {
-    if (inputMessage.trim().length > 0 && !isSending) {
+    if (inputMessage.trim().length > 0 && !isSending && resolved) {
       const res = await onSendPress(inputMessage);
 
       if (res?.type === 'blockedByYou') {
@@ -1337,8 +1482,8 @@ const SingleChat = (props: any) => {
       );
       _setIsBlockedByYou(false);
       flashSuccessMessage(LanguageKeys.unBlocked);
-    } catch {
-      flashErrorMessage(LanguageKeys.somethingWentWrong);
+    } catch (error: unknown) {
+      flashErrorMessage(chatErrorMessageKey(error));
     } finally {
       setIsUnblocking(false);
     }
@@ -1352,6 +1497,7 @@ const SingleChat = (props: any) => {
   };
 
   const startVoiceRecording = async () => {
+    if (!resolved) return;
     await stopAudioPlayback();
 
     const hasPermission = await chatAudioService.requestRecordPermission();
@@ -1439,6 +1585,7 @@ const SingleChat = (props: any) => {
         currentUserId={currentUser?.id}
         isBlockedByYou={isBlockedByYou}
         isBlockedYou={isBlockedYou}
+        isPartnerDeleted={isPartnerDeleted}
         setMessages={setMessages}
       />
       <NotificationPermissionBanner />
@@ -1472,6 +1619,45 @@ const SingleChat = (props: any) => {
                 size={'small'}
                 style={Styles.chatLoader}
               />
+            ) : loadError ? (
+              <View
+                style={{
+                  flex: 1,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  paddingHorizontal: wp(8),
+                  gap: wp(4),
+                }}
+              >
+                <Text
+                  style={{
+                    color: Colors.muted,
+                    fontSize: wp(3.6),
+                    textAlign: 'center',
+                  }}
+                >
+                  {t(LanguageKeys.chatLoadFailed)}
+                </Text>
+                <TouchableOpacity
+                  onPress={onRetryLoad}
+                  style={{
+                    paddingVertical: wp(2.5),
+                    paddingHorizontal: wp(6),
+                    borderRadius: wp(6),
+                    backgroundColor: Colors.primary,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: Colors.color2,
+                      fontWeight: '600',
+                      fontSize: wp(3.6),
+                    }}
+                  >
+                    {t(LanguageKeys.tryAgain)}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             ) : messages?.length ? (
               <VirtualizedList
                 onScrollBeginDrag={onScrollBegin}
@@ -1532,7 +1718,38 @@ const SingleChat = (props: any) => {
             {showIcebreakers && !isRecordingVoice && (
               <IcebreakerChips onSelect={onIcebreakerSelect} rtl={Rtl} />
             )}
-            {isRecordingVoice ? (
+            {loadError === 'resolve' ? null : isPartnerDeleted ? (
+              // The member's account is gone: history stays readable, but
+              // there is no one to message.
+              <View
+                style={{
+                  flexDirection: Rtl ? 'row-reverse' : 'row',
+                  alignItems: 'center',
+                  paddingVertical: wp(3.5),
+                  paddingHorizontal: wp(4),
+                  borderTopWidth: 1,
+                  borderTopColor: Colors.hairline,
+                  gap: wp(3),
+                }}
+              >
+                <Ionicons
+                  name="information-circle-outline"
+                  size={wp(5)}
+                  color={Colors.muted}
+                />
+                <Text
+                  style={{
+                    flex: 1,
+                    color: Colors.muted,
+                    fontSize: wp(3.4),
+                    textAlign: Rtl ? 'right' : 'left',
+                  }}
+                  numberOfLines={2}
+                >
+                  {t(LanguageKeys.chatPartnerUnavailable)}
+                </Text>
+              </View>
+            ) : isRecordingVoice ? (
               <VoiceRecorderBar
                 elapsedSeconds={voiceElapsedSeconds}
                 isSending={isSendingVoice}
@@ -1624,7 +1841,7 @@ const SingleChat = (props: any) => {
                   }}
                   disabled={isSending}
                   onPress={async () => {
-                    if (isSending) return;
+                    if (isSending || !resolved) return;
                     if (inputMessage.trim().length === 0) {
                       await startVoiceRecording();
                       return;

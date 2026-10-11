@@ -29,6 +29,7 @@ import {
 } from '../../services';
 import messageServices from '../../services/api/message-services';
 import type { Message } from '../../services/api/types/message-types';
+import { chatErrorMessageKey } from './chat-error-messages';
 
 type SingleChatHeaderProps = {
   navigation: any;
@@ -39,6 +40,8 @@ type SingleChatHeaderProps = {
   currentUserId: string | number;
   isBlockedByYou: boolean;
   isBlockedYou: boolean;
+  /** Partner's account is gone: no profile, badges or block actions. */
+  isPartnerDeleted?: boolean;
   setMessages: (messages: Message[]) => void;
 };
 
@@ -51,6 +54,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
     currentUserId,
     isBlockedByYou: propsIsBlockedByYou,
     isBlockedYou: propsIsBlockedYou,
+    isPartnerDeleted = false,
     setMessages,
   } = props;
 
@@ -161,9 +165,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
       setIsBlockedByYou(willBlock);
       hideModalLoader();
     } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Failed to block/unblock user';
-      flashErrorMessage(errorMessage);
+      flashErrorMessage(chatErrorMessageKey(error));
       hideModalLoader();
     }
   };
@@ -205,11 +207,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
       setIsBlockedByYou(true);
       hideModalLoader();
     } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : 'Failed to block and report user';
-      flashErrorMessage(errorMessage);
+      flashErrorMessage(chatErrorMessageKey(error));
       hideModalLoader();
     }
   };
@@ -249,9 +247,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
       await messageServices.clearConversation(conversationIdNum);
       conversationClearSuccess();
     } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Failed to clear conversation';
-      flashErrorMessage(errorMessage);
+      flashErrorMessage(chatErrorMessageKey(error));
       hideModalLoader();
     }
   };
@@ -300,11 +296,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
       await messageServices.deleteConversation(conversationIdNum);
       conversationDeleteSuccess();
     } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : 'Failed to delete conversation';
-      flashErrorMessage(errorMessage);
+      flashErrorMessage(chatErrorMessageKey(error));
       hideModalLoader();
     }
   };
@@ -350,13 +342,19 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
       .catch(hideModalLoader);
   };
 
-  let optionsArray = [];
+  let optionsArray: string[] = [];
   const blurText = isBlurred
     ? 'Unblur Profile Picture'
     : 'Blur Profile Picture';
-  const viewProfileOption = isSupportConversation ? [] : ['View profile'];
-  const viewProfileAction = isSupportConversation ? [] : [onViewProfilePress];
-  if (!hasConversation) {
+  const hideProfileActions = isSupportConversation || isPartnerDeleted;
+  const viewProfileOption = hideProfileActions ? [] : ['View profile'];
+  const viewProfileAction = hideProfileActions ? [] : [onViewProfilePress];
+  if (isPartnerDeleted) {
+    // A deleted member can't be blocked or viewed; only local cleanup remains.
+    optionsArray = hasConversation
+      ? ['Clear chat', 'Delete conversation', 'Cancel']
+      : ['Clear chat', 'Cancel'];
+  } else if (!hasConversation) {
     if (isBlockedByYou) {
       optionsArray = [
         ...viewProfileOption,
@@ -398,8 +396,12 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
     }
   }
 
-  let actionsArray = [];
-  if (!hasConversation) {
+  let actionsArray: Array<() => void> = [];
+  if (isPartnerDeleted) {
+    actionsArray = hasConversation
+      ? [showClearChatAlert, showDeleteChatAlert]
+      : [showClearChatAlert];
+  } else if (!hasConversation) {
     if (isBlockedByYou) {
       actionsArray = [
         ...viewProfileAction,
@@ -453,7 +455,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
         <Ripple
           style={Styles.headerInnerCon}
           onPress={() => {
-            if (isSupportConversation) {
+            if (isSupportConversation || isPartnerDeleted) {
               return;
             }
             props.navigation.navigate('UserProfile', {
@@ -486,7 +488,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
             <Text variant="display" style={Styles.userName} numberOfLines={1}>
               {capitalizeName(otherUserData?.name)}
             </Text>
-            {!isSupportConversation ? (
+            {!isSupportConversation && !isPartnerDeleted ? (
               <ProfileBadges
                 userData={otherUserData}
                 iconOnly

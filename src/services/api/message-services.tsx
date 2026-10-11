@@ -7,6 +7,7 @@ import type {
   GetConversationMessagesResponse,
   GetConversationsListParams,
   GetConversationsListResponse,
+  GetConversationWithUserResponse,
   GetMessageAudioUrlResponse,
   Message,
   ReportMessagePayload,
@@ -92,6 +93,41 @@ class MessageServices {
 
           console.error('[MessageServices.startConversation] Error:', {
             message: errorMessage,
+            status: error?.response?.status,
+            data: error?.response?.data,
+          });
+          reject(chatError);
+        });
+    });
+  };
+
+  /**
+   * Looks up the caller's private conversation with a member.
+   * @param userId - The other member's user id
+   * @returns Promise resolving to the conversation, or null when none exists
+   */
+  getConversationWithUser = (userId: number | string) => {
+    return new Promise<Conversation | null>((resolve, reject) => {
+      Api.get(EndPoints.getConversationWithUser(userId))
+        .then((response) => {
+          const data = response.data as GetConversationWithUserResponse;
+
+          if (data?.error === true) {
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to look up conversation'
+              )
+            );
+            return;
+          }
+
+          resolve(data?.results ?? null);
+        })
+        .catch((error) => {
+          const chatError = toChatApiError(error);
+          console.error('[MessageServices.getConversationWithUser] Error:', {
+            message: chatError.message,
             status: error?.response?.status,
             data: error?.response?.data,
           });

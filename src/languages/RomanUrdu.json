@@ -691,6 +691,8 @@
     "chatErrorAccountSuspended": "Your account is suspended.",
     "chatErrorForbidden": "You don't have access to this conversation.",
     "chatErrorRateLimited": "You are sending messages too quickly. Please wait a moment.",
-    "chatErrorNetwork": "Network problem. Check your connection and try again."
+    "chatErrorNetwork": "Network problem. Check your connection and try again.",
+    "chatPartnerUnavailable": "This member is no longer available",
+    "chatLoadFailed": "We couldn't open this chat. Please try again."
   }
 }

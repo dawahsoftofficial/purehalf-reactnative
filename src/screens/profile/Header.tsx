@@ -108,13 +108,6 @@ type User = {
   blocked?: number;
 };
 
-type Conversation = {
-  convDetails: {
-    id?: string;
-  };
-  messages: unknown[];
-};
-
 type HeaderProps = {
   navigation: NavigationProp<ParamListBase>;
   userData: User;
@@ -347,9 +340,12 @@ const Header = ({
 }: HeaderProps) => {
   const { currentUser, updateCurrentUser } = useGlobalContext();
   const { t } = useTranslation();
-  const [userConversation, setUserConversation] = useState<Conversation | null>(
-    null
-  );
+  // The caller's existing private conversation with this member, or null.
+  const [userConversation, setUserConversation] =
+    useState<ApiConversation | null>(null);
+  // True once the lookup answered, so "no conversation" really means a NEW
+  // chat. If the lookup failed we don't know, and the server decides.
+  const [conversationLookupDone, setConversationLookupDone] = useState(false);
   const [liked, setLiked] = useState<boolean>(Boolean(initialUserData?.liked));
   const [profileImageLoader, setProfileImageLoader] = useState(false);
   const [profileImageError, setProfileImageError] = useState(false);
@@ -420,31 +416,20 @@ const Header = ({
       return;
     }
 
-    // Always fetch from API to get the latest conversation data
     messageServices
-      .getConversationsList()
-      .then((apiConversations: ApiConversation[]) => {
-        // Filter conversations where the other user is a participant
-        const foundConversation = apiConversations.find((conv) => {
-          return conv.participants?.some(
-            (participant) => participant.id === otherUserId
-          );
-        });
-
-        if (foundConversation) {
-          // Convert API Conversation to the expected format
-          setUserConversation(foundConversation as unknown as Conversation);
-        } else {
-          // No conversation found - will be null, allowing new conversation creation
-          setUserConversation(null);
-        }
+      .getConversationWithUser(otherUserId)
+      .then((conversation) => {
+        // null => no conversation yet, so the first send creates one.
+        setUserConversation(conversation);
+        setConversationLookupDone(true);
         setMessageButtonLoader(false);
       })
       .catch((error) => {
         console.error(
-          '[Header.getUserConversation] Error fetching conversations:',
+          '[Header.getUserConversation] Error looking up conversation:',
           error
         );
+        setConversationLookupDone(false);
         setMessageButtonLoader(false);
       });
   }, [currentUser?.id, currentUser?.user?.id, userData?.id]);
@@ -458,21 +443,20 @@ const Header = ({
   );
 
   const navigateToChat = useCallback(() => {
+    // Pass the resolved conversation when we have it; otherwise SingleChat
+    // resolves it from the user id.
     navigation.navigate('SingleChat', {
       otherUserData: chatUserData,
-      conversationData: userConversation,
+      userId: userData?.id,
+      conversationData: userConversation ?? undefined,
       fromProfile: true,
     });
-  }, [chatUserData, navigation, userConversation]);
+  }, [chatUserData, navigation, userConversation, userData?.id]);
 
   const onMessagePress = useCallback(async () => {
-    // Check if this is a new conversation (no existing conversation)
-    // userConversation can be Conversation (old) or ApiConversation (new) type
-    const conversationId = userConversation
-      ? (userConversation as unknown as ApiConversation)?.id ||
-        (userConversation as Conversation)?.convDetails?.id
-      : null;
-    const isNewConversation = !conversationId;
+    // Only a confirmed-new conversation costs credits. When the lookup failed
+    // we can't tell, so let the server (NO_CHAT_CREDITS) be the judge.
+    const isNewConversation = conversationLookupDone && !userConversation;
 
     // If it's a new conversation, check if user has sufficient credits (50 credits required)
     if (isNewConversation) {
@@ -521,7 +505,13 @@ const Header = ({
 
     // User has sufficient credits or it's an existing conversation, proceed to chat
     navigateToChat();
-  }, [currentUser, navigateToChat, updateCurrentUser, userConversation]);
+  }, [
+    conversationLookupDone,
+    currentUser,
+    navigateToChat,
+    updateCurrentUser,
+    userConversation,
+  ]);
 
   const Rtl = CheckRtl();
 

@@ -76,7 +76,9 @@ export const TesterApi = {
     );
   },
   async submitNote(data: FormData) {
-    return result<TesterNote>(await Api.post('/auth/tester/notes', data));
+    return result<TesterNote>(
+      await Api.post('/auth/tester/notes', data, { timeout: 60000 })
+    );
   },
   async notes() {
     return result<TesterNoteSummary[]>(await Api.get('/auth/tester/notes'));

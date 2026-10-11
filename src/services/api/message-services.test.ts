@@ -144,6 +144,8 @@ describe('messageServices coded errors', () => {
 
   it('rejects with NETWORK when there is no response (timeout/offline)', async () => {
     (Api.post as jest.Mock).mockRejectedValue({
+      isAxiosError: true,
+      code: 'ECONNABORTED',
       message: 'timeout of 20000ms exceeded',
     });
 
@@ -175,6 +177,48 @@ describe('messageServices coded errors', () => {
 
     expect((Api.post as jest.Mock).mock.calls[0][2]).toEqual({
       timeout: 60000,
+    });
+  });
+
+  describe('getConversationWithUser', () => {
+    it('GETs the with-user endpoint and returns the conversation', async () => {
+      (Api.get as jest.Mock).mockResolvedValue({
+        data: { error: false, results: { id: 9, participants: [] } },
+      });
+
+      const result = await messageServices.getConversationWithUser(42);
+
+      expect(Api.get).toHaveBeenCalledWith(
+        EndPoints.getConversationWithUser(42)
+      );
+      expect(EndPoints.getConversationWithUser(42)).toBe(
+        '/auth/conversations/with/42'
+      );
+      expect(result).toMatchObject({ id: 9 });
+    });
+
+    it('resolves null when no conversation exists', async () => {
+      (Api.get as jest.Mock).mockResolvedValue({
+        data: { error: false, results: null },
+      });
+
+      await expect(messageServices.getConversationWithUser(42)).resolves.toBe(
+        null
+      );
+    });
+
+    it('rejects with a ChatApiError on a coded failure', async () => {
+      (Api.get as jest.Mock).mockRejectedValue({
+        isAxiosError: true,
+        response: {
+          status: 403,
+          data: { error_code: 'FORBIDDEN', results: 'No' },
+        },
+      });
+
+      await expect(
+        messageServices.getConversationWithUser(42)
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     });
   });
 });

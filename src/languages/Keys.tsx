@@ -705,6 +705,8 @@ const Keys = {
   chatErrorForbidden: 'chatErrorForbidden',
   chatErrorRateLimited: 'chatErrorRateLimited',
   chatErrorNetwork: 'chatErrorNetwork',
+  chatPartnerUnavailable: 'chatPartnerUnavailable',
+  chatLoadFailed: 'chatLoadFailed',
 };
 
 export default Keys;

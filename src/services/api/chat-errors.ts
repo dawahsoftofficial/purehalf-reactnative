@@ -44,6 +44,12 @@ const SERVER_CODES: ReadonlySet<string> = new Set<ChatErrorCode>([
   'FORBIDDEN',
 ]);
 
+const NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
+  'ECONNABORTED',
+  'ERR_NETWORK',
+  'ETIMEDOUT',
+]);
+
 const LEGACY_NO_CREDITS_TEXT = 'you have no chat credits left';
 const GENERIC_MESSAGE = 'Something went wrong. Please try again.';
 const NETWORK_MESSAGE = 'Network error. Please check your connection.';
@@ -70,6 +76,8 @@ export function toChatApiError(error: unknown): ChatApiError {
 
   const err = error as
     | {
+        isAxiosError?: unknown;
+        code?: unknown;
         message?: unknown;
         response?: { status?: number; data?: Record<string, unknown> | null };
       }
@@ -82,9 +90,16 @@ export function toChatApiError(error: unknown): ChatApiError {
 
   const response = err.response;
 
-  // No response at all: offline, DNS failure or the request timed out.
   if (!response) {
-    return new ChatApiError('NETWORK', NETWORK_MESSAGE);
+    // No response: offline, DNS failure or the request timed out. Only an
+    // axios transport failure counts; a JS error thrown in a `.then` handler
+    // or a cancelled request is not the user's connection.
+    const isTransportFailure =
+      NETWORK_ERROR_CODES.has(err.code as string) ||
+      (err.isAxiosError === true && err.code !== 'ERR_CANCELED');
+    return isTransportFailure
+      ? new ChatApiError('NETWORK', NETWORK_MESSAGE)
+      : new ChatApiError('UNKNOWN', GENERIC_MESSAGE);
   }
 
   const status = response.status;

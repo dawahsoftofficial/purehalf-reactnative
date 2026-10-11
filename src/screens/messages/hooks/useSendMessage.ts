@@ -3,18 +3,15 @@ import { useRef, useState } from 'react';
 
 import { recordSentMessage } from '@/services/rating/ratingEngagement';
 
-import { LanguageKeys } from '../../../languages';
 import { flashErrorMessage } from '../../../services';
-import {
-  type ChatErrorCode,
-  toChatApiError,
-} from '../../../services/api/chat-errors';
+import { toChatApiError } from '../../../services/api/chat-errors';
 import messageServices from '../../../services/api/message-services';
 import type {
   Conversation,
   Message,
 } from '../../../services/api/types/message-types';
 import { presentChatCreditsPaywall } from '../../../services/paywall-service';
+import { chatErrorMessageKey } from '../chat-error-messages';
 
 type OtherUserData = {
   id: number;
@@ -36,19 +33,6 @@ type UseSendMessageParams = {
    * the other). When omitted the localized message is flashed instead.
    */
   onBlocked?: () => void;
-};
-
-// Localized copy per error code. Codes not listed here (VALIDATION, UNKNOWN)
-// fall back to the generic error message rather than showing raw server text.
-const CHAT_ERROR_MESSAGE_KEYS: Partial<Record<ChatErrorCode, string>> = {
-  NO_CHAT_CREDITS: LanguageKeys.chatErrorNoCredits,
-  BLOCKED: LanguageKeys.chatErrorBlocked,
-  WAIT_FOR_REPLY: LanguageKeys.chatErrorWaitForReply,
-  RECIPIENT_UNAVAILABLE: LanguageKeys.chatErrorRecipientUnavailable,
-  ACCOUNT_SUSPENDED: LanguageKeys.chatErrorAccountSuspended,
-  FORBIDDEN: LanguageKeys.chatErrorForbidden,
-  RATE_LIMITED: LanguageKeys.chatErrorRateLimited,
-  NETWORK: LanguageKeys.chatErrorNetwork,
 };
 
 type SendMessageResult =
@@ -96,9 +80,7 @@ export function useSendMessage({
       return;
     }
 
-    flashErrorMessage(
-      CHAT_ERROR_MESSAGE_KEYS[chatError.code] ?? LanguageKeys.commonErrorMessage
-    );
+    flashErrorMessage(chatErrorMessageKey(chatError));
 
     if (chatError.code === 'NO_CHAT_CREDITS') {
       void presentChatCreditsPaywall();
