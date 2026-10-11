@@ -6,13 +6,36 @@ import {
   onNotificationOpenedApp,
 } from '@react-native-firebase/messaging';
 import { useEffect } from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
 
-import { ApiServices, Firebase } from '../services';
+import { ApiServices, Firebase, StorageManager } from '../services';
+import { shouldUploadFcmToken } from './fcmToken';
+import { getNotificationPermissionStatus } from './NotificationPermissions';
 import { openChatFromPush } from './pendingPush';
 import { handleNotifeeEvent, handleNotifeePress } from './pushEvents';
 import { getChatPushParams } from './pushPayload';
 
 const messaging = getMessaging(getApp());
+
+/**
+ * Uploads the device's FCM token when notifications are allowed and it differs
+ * from the one last confirmed by the backend (rotated while the app was closed,
+ * or never uploaded). Best-effort and silent: ApiServices.syncFcmToken does
+ * nothing when signed out and never sends the 'FcmToken' placeholder.
+ */
+async function syncFcmTokenIfChanged(): Promise<void> {
+  try {
+    if ((await getNotificationPermissionStatus()) !== 'granted') return;
+    const token = await Firebase.getFcmToken();
+    const lastUploaded = await StorageManager.getData(
+      StorageManager.storageKeys.FCM_TOKEN_UPLOADED
+    );
+    if (!shouldUploadFcmToken(token, lastUploaded)) return;
+    await ApiServices.syncFcmToken(token);
+  } catch (error) {
+    console.log('[usePushHandlers] FCM token sync skipped:', error);
+  }
+}
 
 const openFromRemoteMessage = (message: unknown) => {
   const params = getChatPushParams(
@@ -66,10 +89,20 @@ export function usePushHandlers() {
       void ApiServices.syncFcmToken(token);
     });
 
+    // On start and whenever the app returns to the foreground.
+    void syncFcmTokenIfChanged();
+    const appStateSubscription = AppState.addEventListener(
+      'change',
+      (state: AppStateStatus) => {
+        if (state === 'active') void syncFcmTokenIfChanged();
+      }
+    );
+
     return () => {
       unsubscribeOpened?.();
       unsubscribeForeground?.();
       unsubscribeToken?.();
+      appStateSubscription.remove();
     };
   }, []);
 }

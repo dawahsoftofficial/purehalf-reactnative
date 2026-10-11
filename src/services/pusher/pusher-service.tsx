@@ -10,6 +10,7 @@ import { useConversationStore } from '../../stores/conversation-store';
 import { useUserStatsStore } from '../../stores/user-stats-store';
 import BaseUrl from '../api/BaseUrl';
 import type { CounterUpdateEventData } from '../api/types/message-types';
+import { resolveUnreadCounts } from '../chat/unreadCounts';
 import { StorageManager } from '../storageManager';
 
 type PusherConfig = {
@@ -25,13 +26,31 @@ type PusherConfig = {
  */
 type ChannelSubscription = {
   channel: PusherChannel;
-  callbacks: Set<(event: PusherEvent) => void>;
 };
+
+/** One `subscribeToChannel` call; identity is what makes cleanup exact. */
+type Subscriber = {
+  onEvent?: (event: PusherEvent) => void;
+};
+
+export type PusherConnectionListener = (
+  currentState: string,
+  previousState: string
+) => void;
 
 class PusherService {
   private pusher: Pusher | null = null;
+  /** Channels with a live native subscription. */
   private channels: Map<string, ChannelSubscription> = new Map();
+  /**
+   * Everyone who asked for a channel, whether or not the native subscription
+   * exists yet. This is what gets re-subscribed once Pusher is initialized /
+   * connected, or after a subscription error removed the channel.
+   */
+  private desired: Map<string, Set<Subscriber>> = new Map();
   private pendingSubscriptions: Map<string, Promise<void>> = new Map();
+  private connectionListeners: Set<PusherConnectionListener> = new Set();
+  private connectionState = 'DISCONNECTED';
   private config: PusherConfig | null = null;
   private isConnected = false;
   private initialized = false;
@@ -73,6 +92,21 @@ class PusherService {
             current: currentState,
           });
           this.isConnected = currentState === 'CONNECTED';
+          this.connectionState = currentState;
+          this.connectionListeners.forEach((listener) => {
+            try {
+              listener(currentState, previousState);
+            } catch (listenerError) {
+              console.error(
+                '[PusherService] Connection listener error:',
+                listenerError
+              );
+            }
+          });
+          if (currentState === 'CONNECTED') {
+            // Subscriptions requested while offline (or that errored) retry now.
+            void this.resubscribeDesired();
+          }
         },
         onError: (message: string, code: any, error: unknown) => {
           console.error('[PusherService] Error:', { message, code, error });
@@ -188,6 +222,9 @@ class PusherService {
       this.isConnected = true;
 
       console.log('[PusherService] Initialized and connected');
+      // Channels requested before Pusher was ready (the app root and screens
+      // subscribe on mount, which can precede init).
+      void this.resubscribeDesired();
       return this.pusher;
     } catch (error) {
       console.error('[PusherService.initialize] Error:', error);
@@ -205,9 +242,11 @@ class PusherService {
   unsubscribeFromChannel = async (channelName: string) => {
     const sub = this.channels.get(channelName);
     if (sub && this.pusher) {
+      // Forget it first so a subscriber that arrives while the native
+      // unsubscribe is in flight creates a fresh subscription.
+      this.channels.delete(channelName);
       try {
         await this.pusher.unsubscribe({ channelName });
-        this.channels.delete(channelName);
         console.log('[PusherService] Unsubscribed from:', channelName);
       } catch (error) {
         console.error('[PusherService.unsubscribeFromChannel] Error:', error);
@@ -230,6 +269,7 @@ class PusherService {
         await this.pusher.disconnect();
         this.pusher = null;
         this.isConnected = false;
+        this.connectionState = 'DISCONNECTED';
         this.initialized = false;
         console.log('[PusherService] Disconnected from Pusher');
       } catch (error) {
@@ -298,160 +338,225 @@ class PusherService {
     return this.initialized && this.pusher !== null;
   };
 
+  /** Current Pusher connection state ('CONNECTED', 'CONNECTING', ...). */
+  getConnectionState = (): string => this.connectionState;
+
+  /**
+   * Listens for connection state changes. Returns the remover.
+   */
+  addConnectionListener = (
+    listener: PusherConnectionListener
+  ): (() => void) => {
+    this.connectionListeners.add(listener);
+    return () => {
+      this.connectionListeners.delete(listener);
+    };
+  };
+
+  /** Re-attempts every requested channel that has no live subscription. */
+  private resubscribeDesired = async (): Promise<void> => {
+    const names = Array.from(this.desired.keys()).filter(
+      (name) => !this.channels.has(name)
+    );
+    await Promise.all(names.map((name) => this.ensureSubscribed(name)));
+  };
+
+  /**
+   * A subscription failed (auth error, etc.): forget the dead channel so the
+   * next subscriber, or the next CONNECTED, subscribes afresh.
+   */
+  private dropFailedChannel = (channelName: string) => {
+    this.channels.delete(channelName);
+    const pusher = this.pusher;
+    if (pusher) {
+      pusher.unsubscribe({ channelName }).catch(() => {});
+    }
+  };
+
+  private dispatchToSubscribers = (channelName: string, event: PusherEvent) => {
+    const subscribers = this.desired.get(channelName);
+    if (!subscribers) return;
+    Array.from(subscribers).forEach((subscriber) => {
+      try {
+        subscriber.onEvent?.(event);
+      } catch (error) {
+        console.error('[PusherService] Subscriber threw:', error);
+      }
+    });
+  };
+
+  /**
+   * Creates the single native subscription for a requested channel. No-op if
+   * it already exists, is in flight, nobody wants it, or Pusher is not ready.
+   */
+  private ensureSubscribed = async (channelName: string): Promise<void> => {
+    if (this.channels.has(channelName)) return;
+    const inFlight = this.pendingSubscriptions.get(channelName);
+    if (inFlight) {
+      await inFlight.catch(() => {});
+      return;
+    }
+    if (!this.desired.has(channelName) || !this.isReady() || !this.pusher) {
+      return;
+    }
+
+    const pusher = this.pusher;
+    let failed = false;
+    const subscribePromise = (async (): Promise<void> => {
+      const channel = await pusher.subscribe({
+        channelName,
+        onSubscriptionSucceeded: () => {
+          console.log(
+            '[PusherService] ✅ Successfully subscribed to channel:',
+            channelName
+          );
+        },
+        onSubscriptionError: (name: string, message: string) => {
+          console.error('[PusherService] ❌ Subscription error:', {
+            channelName: name,
+            message,
+          });
+          if (
+            message.includes('MethodNotAllowed') ||
+            message.includes('POST method is not supported')
+          ) {
+            console.error(
+              '[PusherService] ⚠️ Backend Route Error: ' +
+                'The broadcasting/auth endpoint must accept POST requests. ' +
+                'Please ask your backend developer to ensure the route accepts POST method.'
+            );
+          }
+          failed = true;
+          this.dropFailedChannel(channelName);
+        },
+        onEvent: (event: PusherEvent) => {
+          if (event.eventName === 'pusher:subscription_error') {
+            console.error(
+              '[PusherService] ❌ Subscription error event received'
+            );
+            try {
+              const errorData =
+                typeof event.data === 'string'
+                  ? JSON.parse(event.data)
+                  : event.data;
+              console.error(
+                '[PusherService] Subscription error details:',
+                errorData
+              );
+            } catch (e) {
+              console.error(
+                '[PusherService] Error parsing subscription error:',
+                e
+              );
+              if (
+                typeof event.data === 'string' &&
+                event.data.includes('<!DOCTYPE html>')
+              ) {
+                if (event.data.includes('MethodNotAllowedHttpException')) {
+                  console.error(
+                    '[PusherService] ⚠️ Backend Configuration Issue:\n' +
+                      'The broadcasting/auth route only accepts GET/HEAD, but Pusher requires POST.\n' +
+                      'Backend fix needed: Ensure the route accepts POST method.\n' +
+                      'In Laravel, check routes/channels.php or broadcasting.php configuration.'
+                  );
+                } else {
+                  console.error(
+                    '[PusherService] Backend returned HTML error page instead of JSON'
+                  );
+                }
+              } else {
+                console.error(
+                  '[PusherService] Error parsing subscription error:',
+                  event.data
+                );
+              }
+            }
+            failed = true;
+            this.dropFailedChannel(channelName);
+            return;
+          }
+
+          console.log(
+            '[PusherService] 📨 Event received on',
+            channelName,
+            ':',
+            { eventName: event.eventName, data: event.data }
+          );
+          this.dispatchToSubscribers(channelName, event);
+        },
+      });
+
+      // The error callback can fire before subscribe() resolves; do not
+      // resurrect a channel that already failed.
+      if (!failed) {
+        this.channels.set(channelName, { channel });
+      }
+    })();
+
+    this.pendingSubscriptions.set(channelName, subscribePromise);
+    try {
+      await subscribePromise;
+    } catch (error) {
+      console.error('[PusherService.ensureSubscribed] Error:', error);
+      this.channels.delete(channelName);
+    } finally {
+      if (this.pendingSubscriptions.get(channelName) === subscribePromise) {
+        this.pendingSubscriptions.delete(channelName);
+      }
+    }
+    // Every subscriber left while the subscription was being created.
+    if (!this.desired.has(channelName)) {
+      void this.unsubscribeFromChannel(channelName);
+    }
+  };
+
   /**
    * Subscribe to any channel (public or private).
    * Safe to call multiple times for the same channel (e.g. when both users send at once):
-   * only one native subscription is created and callbacks are multiplexed.
+   * only one native subscription is created and events are multiplexed to every
+   * subscriber. A request made before Pusher is ready, or while offline, is
+   * remembered and fulfilled when Pusher initializes / becomes CONNECTED; a
+   * subscription that errors is dropped so it is retried the same way.
    * @param channelName - Channel name to subscribe to
    * @param onEvent - Callback for any event received on this channel
+   * @returns cleanup that removes exactly this subscriber (and the native
+   *   subscription once nobody is left)
    */
   subscribeToChannel = async (
     channelName: string,
     onEvent?: (event: PusherEvent) => void
   ): Promise<() => void> => {
-    if (!this.isReady() || !this.pusher) {
-      console.error('[PusherService] Pusher not initialized or ready', {
-        initialized: this.initialized,
-        pusherExists: this.pusher !== null,
-        isConnected: this.isConnected,
-      });
-      return () => {};
+    const subscriber: Subscriber = { onEvent };
+    let subscribers = this.desired.get(channelName);
+    if (!subscribers) {
+      subscribers = new Set();
+      this.desired.set(channelName, subscribers);
     }
+    subscribers.add(subscriber);
 
+    let cleanedUp = false;
     const cleanup = (): void => {
-      const sub = this.channels.get(channelName);
-      if (!sub) return;
-      if (onEvent) sub.callbacks.delete(onEvent);
-      if (sub.callbacks.size === 0) {
-        this.unsubscribeFromChannel(channelName);
+      if (cleanedUp) return;
+      cleanedUp = true;
+      const current = this.desired.get(channelName);
+      if (!current) return;
+      current.delete(subscriber);
+      if (current.size === 0) {
+        this.desired.delete(channelName);
+        void this.unsubscribeFromChannel(channelName);
       }
     };
 
-    // Already subscribed: add callback and return cleanup
-    const existing = this.channels.get(channelName);
-    if (existing) {
-      if (onEvent) existing.callbacks.add(onEvent);
+    if (!this.isReady()) {
+      console.log(
+        '[PusherService] Pusher not ready yet; subscription to',
+        channelName,
+        'will start when it connects'
+      );
       return cleanup;
     }
 
-    // Subscription in progress: wait then add callback (avoid duplicate native subscribe)
-    const pending = this.pendingSubscriptions.get(channelName);
-    if (pending) {
-      await pending.catch(() => {}); // don't throw to caller if first subscribe failed
-      const subAfter = this.channels.get(channelName);
-      if (subAfter && onEvent) {
-        subAfter.callbacks.add(onEvent);
-      }
-      return cleanup;
-    }
-
-    try {
-      const callbacks = new Set<(event: PusherEvent) => void>();
-      if (onEvent) callbacks.add(onEvent);
-
-      const subscribePromise = (async (): Promise<void> => {
-        const channel = await this.pusher!.subscribe({
-          channelName,
-          onSubscriptionSucceeded: () => {
-            console.log(
-              '[PusherService] ✅ Successfully subscribed to channel:',
-              channelName
-            );
-          },
-          onSubscriptionError: (name: string, message: string) => {
-            console.error('[PusherService] ❌ Subscription error:', {
-              channelName: name,
-              message,
-            });
-            if (
-              message.includes('MethodNotAllowed') ||
-              message.includes('POST method is not supported')
-            ) {
-              console.error(
-                '[PusherService] ⚠️ Backend Route Error: ' +
-                  'The broadcasting/auth endpoint must accept POST requests. ' +
-                  'Please ask your backend developer to ensure the route accepts POST method.'
-              );
-            }
-          },
-          onEvent: (event: PusherEvent) => {
-            if (event.eventName === 'pusher:subscription_error') {
-              console.error(
-                '[PusherService] ❌ Subscription error event received'
-              );
-              try {
-                const errorData =
-                  typeof event.data === 'string'
-                    ? JSON.parse(event.data)
-                    : event.data;
-                console.error(
-                  '[PusherService] Subscription error details:',
-                  errorData
-                );
-              } catch (e) {
-                console.error(
-                  '[PusherService] Error parsing subscription error:',
-                  e
-                );
-                if (
-                  typeof event.data === 'string' &&
-                  event.data.includes('<!DOCTYPE html>')
-                ) {
-                  if (event.data.includes('MethodNotAllowedHttpException')) {
-                    console.error(
-                      '[PusherService] ⚠️ Backend Configuration Issue:\n' +
-                        'The broadcasting/auth route only accepts GET/HEAD, but Pusher requires POST.\n' +
-                        'Backend fix needed: Ensure the route accepts POST method.\n' +
-                        'In Laravel, check routes/channels.php or broadcasting.php configuration.'
-                    );
-                  } else {
-                    console.error(
-                      '[PusherService] Backend returned HTML error page instead of JSON'
-                    );
-                  }
-                } else {
-                  console.error(
-                    '[PusherService] Error parsing subscription error:',
-                    event.data
-                  );
-                }
-              }
-              return;
-            }
-
-            console.log(
-              '[PusherService] 📨 Event received on',
-              channelName,
-              ':',
-              { eventName: event.eventName, data: event.data }
-            );
-            try {
-              const data =
-                typeof event.data === 'string'
-                  ? JSON.parse(event.data)
-                  : event.data;
-              console.log('[PusherService] 📦 Parsed event data:', data);
-            } catch (_error) {
-              console.log('[PusherService] 📦 Raw event data:', event.data);
-            }
-            callbacks.forEach((cb) => cb(event));
-          },
-        });
-
-        this.channels.set(channelName, { channel, callbacks });
-      })();
-
-      this.pendingSubscriptions.set(channelName, subscribePromise);
-      await subscribePromise;
-    } catch (error) {
-      console.error('[PusherService.subscribeToChannel] Error:', error);
-      this.pendingSubscriptions.delete(channelName);
-      this.channels.delete(channelName);
-      return () => {};
-    } finally {
-      this.pendingSubscriptions.delete(channelName);
-    }
-
+    await this.ensureSubscribed(channelName);
     return cleanup;
   };
 }
@@ -526,23 +631,25 @@ export function usePusher(config: PusherConfig | null) {
 /**
  * React Hook for subscribing to user counters channel globally
  * This hook subscribes to private-user.counters.{userId} channel
- * and handles counter-related events app-wide
+ * and handles counter-related events app-wide.
+ *
+ * The subscription is requested even if Pusher is not initialized yet or the
+ * device is offline: pusherService remembers it and fulfils it once Pusher is
+ * connected (and again after a reconnect or a subscription error).
  */
 export function useUserCountersChannel(
   currentUser: { id: string | number; user?: { id: string | number } } | null,
   updateCurrentUser: (user: unknown) => void
 ) {
-  const unsubscribeCountersChannelRef = useRef<(() => void) | null>(null);
-  const subscribedUserIdRef = useRef<string | number | null>(null);
-
-  // Mirror `currentUser` into a ref so the Pusher event handler below can
-  // always read the latest value WITHOUT having to be in the effect's deps
-  // (which would trigger a resubscribe on every profile update). This fixes
-  // the stale-closure issue audited as M2.
+  // Mirror `currentUser` / `updateCurrentUser` into refs so the Pusher event
+  // handler always reads the latest values WITHOUT being in the effect's deps
+  // (which would trigger a resubscribe on every profile update).
   const currentUserRef = useRef(currentUser);
+  const updateCurrentUserRef = useRef(updateCurrentUser);
   useEffect(() => {
     currentUserRef.current = currentUser;
-  }, [currentUser]);
+    updateCurrentUserRef.current = updateCurrentUser;
+  }, [currentUser, updateCurrentUser]);
 
   // Extract userId using useMemo to avoid unnecessary re-renders
   const userId = useMemo(() => {
@@ -552,151 +659,76 @@ export function useUserCountersChannel(
   }, [currentUser?.id, currentUser?.user?.id]);
 
   useEffect(() => {
-    // If no user or Pusher not ready, cleanup and return
-    if (!currentUser || !pusherService.isReady() || !userId) {
-      // Only cleanup if we were subscribed to a different user
-      if (
-        unsubscribeCountersChannelRef.current &&
-        subscribedUserIdRef.current !== userId
-      ) {
-        console.log(
-          '[useUserCountersChannel] Cleaning up counters channel for user:',
-          subscribedUserIdRef.current
-        );
-        unsubscribeCountersChannelRef.current();
-        unsubscribeCountersChannelRef.current = null;
-        subscribedUserIdRef.current = null;
-      }
-      return;
-    }
+    if (!userId) return undefined;
 
-    // If already subscribed to the same user, don't resubscribe
-    if (
-      subscribedUserIdRef.current === userId &&
-      unsubscribeCountersChannelRef.current
-    ) {
-      console.log(
-        '[useUserCountersChannel] Already subscribed to counters channel for user:',
-        userId
-      );
-      return;
-    }
+    let cancelled = false;
+    let unsubscribe: (() => void) | null = null;
 
-    const setupCountersChannel = async () => {
-      try {
-        // Cleanup previous subscription if switching users
-        if (
-          unsubscribeCountersChannelRef.current &&
-          subscribedUserIdRef.current !== userId
-        ) {
-          console.log(
-            '[useUserCountersChannel] Unsubscribing from previous user:',
-            subscribedUserIdRef.current
-          );
-          unsubscribeCountersChannelRef.current();
-          unsubscribeCountersChannelRef.current = null;
-        }
+    // Subscribe to user counters channel: private-user.counters.{userId}
+    const countersChannelName = `private-user.counters.${userId}`;
 
-        console.log(
-          '[useUserCountersChannel] Setting up counters channel for user:',
-          userId
-        );
+    pusherService
+      .subscribeToChannel(countersChannelName, (event) => {
+        try {
+          const rawData =
+            typeof event.data === 'string'
+              ? JSON.parse(event.data)
+              : event.data;
 
-        // Subscribe to user counters channel: private-user.counters.{userId}
-        const countersChannelName = `private-user.counters.${userId}`;
-
-        const unsubscribeCounters = await pusherService.subscribeToChannel(
-          countersChannelName,
-          (event) => {
-            console.log(
-              '[useUserCountersChannel] Counter event received:',
-              event.eventName
-            );
-
-            try {
-              const rawData =
-                typeof event.data === 'string'
-                  ? JSON.parse(event.data)
-                  : event.data;
-
-              // Extract event type from Laravel event class name or from data.event
-              let eventType = event.eventName;
-              if (eventType.includes('\\')) {
-                // Laravel event class name format: App\Events\User\CounterUpdated
-                eventType = eventType.split('\\').pop() || eventType;
-              }
-
-              // If data has an 'event' field, use that as the event type
-              if (rawData?.event) {
-                eventType = rawData.event;
-              }
-
-              console.log(
-                '[useUserCountersChannel] Normalized counter event type:',
-                eventType
-              );
-
-              // Always read the latest currentUser via the ref — closure
-              // captured at subscribe-time is stale (M2 fix).
-              const latestUser = currentUserRef.current;
-              const latestUserId =
-                latestUser?.id === 'guardian'
-                  ? latestUser?.user?.id
-                  : latestUser?.id;
-
-              if (latestUserId === userId) {
-                handleCounterEvent(
-                  eventType,
-                  rawData,
-                  latestUser,
-                  updateCurrentUser
-                );
-              }
-            } catch (error) {
-              console.error(
-                '[useUserCountersChannel] Error handling counter event:',
-                error
-              );
-            }
+          // Extract event type from Laravel event class name or from data.event
+          let eventType = event.eventName;
+          if (eventType.includes('\\')) {
+            // Laravel event class name format: App\Events\User\CounterUpdated
+            eventType = eventType.split('\\').pop() || eventType;
           }
-        );
 
-        unsubscribeCountersChannelRef.current = unsubscribeCounters;
-        subscribedUserIdRef.current = userId;
-        console.log(
-          '[useUserCountersChannel] ✅ Subscribed to user counters channel'
-        );
-      } catch (error) {
+          // If data has an 'event' field, use that as the event type
+          if (rawData?.event) {
+            eventType = rawData.event;
+          }
+
+          // Always read the latest currentUser via the ref.
+          const latestUser = currentUserRef.current;
+          const latestUserId =
+            latestUser?.id === 'guardian'
+              ? latestUser?.user?.id
+              : latestUser?.id;
+
+          if (latestUserId === userId) {
+            handleCounterEvent(
+              eventType,
+              rawData,
+              latestUser,
+              updateCurrentUserRef.current
+            );
+          }
+        } catch (error) {
+          console.error(
+            '[useUserCountersChannel] Error handling counter event:',
+            error
+          );
+        }
+      })
+      .then((remove) => {
+        if (cancelled) {
+          remove();
+        } else {
+          unsubscribe = remove;
+        }
+      })
+      .catch((error) => {
         console.error(
           '[useUserCountersChannel] Error setting up counters channel:',
           error
         );
-        subscribedUserIdRef.current = null;
-      }
-    };
-
-    setupCountersChannel();
+      });
 
     return () => {
-      // Only cleanup on unmount or when userId actually changes
-      // This cleanup will run when the component unmounts or userId changes
-      if (
-        unsubscribeCountersChannelRef.current &&
-        subscribedUserIdRef.current !== userId
-      ) {
-        console.log(
-          '[useUserCountersChannel] Cleanup: Unsubscribing from user:',
-          subscribedUserIdRef.current
-        );
-        unsubscribeCountersChannelRef.current();
-        unsubscribeCountersChannelRef.current = null;
-        subscribedUserIdRef.current = null;
-      }
+      cancelled = true;
+      unsubscribe?.();
+      unsubscribe = null;
     };
-    // Only depend on userId to avoid resubscribing when currentUser object reference changes
-    // but userId remains the same. We intentionally don't include currentUser in deps
-    // because we only want to resubscribe when the userId changes, not when user data updates.
-  }, [userId, updateCurrentUser]);
+  }, [userId]);
 }
 
 /**
@@ -774,29 +806,23 @@ function handleCounterEvent(
           }
 
           // Update unread counts if present
-          if (
-            participant.unread_conversations_count !== undefined ||
-            participant.unread_messages_count !== undefined
-          ) {
-            const unreadConversationsCount =
-              participant.unread_conversations_count ?? 0;
-            const unreadMessagesCount =
-              typeof participant.unread_messages_count === 'string'
-                ? parseInt(participant.unread_messages_count, 10) || 0
-                : (participant.unread_messages_count ?? 0);
-
+          const conversationStore = useConversationStore.getState();
+          const unread = resolveUnreadCounts(participant, {
+            conversations: conversationStore.unreadConversationsCount,
+            messages: conversationStore.unreadMessagesCount,
+          });
+          if (unread) {
             console.log(
               '[useUserCountersChannel] Updating unread counts:',
-              unreadConversationsCount,
+              unread.conversations,
               'conversations,',
-              unreadMessagesCount,
+              unread.messages,
               'messages'
             );
-
-            // Update conversation store
-            useConversationStore
-              .getState()
-              .setUnreadCounts(unreadConversationsCount, unreadMessagesCount);
+            conversationStore.setUnreadCounts(
+              unread.conversations,
+              unread.messages
+            );
           }
 
           // Update interaction counters (like_count, visit_count, photo_request_count)

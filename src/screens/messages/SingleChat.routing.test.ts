@@ -44,6 +44,24 @@ describe('resolveChatEntry', () => {
     ).toEqual({ kind: 'conversationId', conversationId: '12', userId: 5 });
   });
 
+  it('does not carry a staff/support sender id as a member id (push from an Admin)', () => {
+    expect(
+      resolveChatEntry({
+        conversationId: '12',
+        otherUserData: { id: 5, type: 'Admin' },
+      })
+    ).toEqual({ kind: 'conversationId', conversationId: '12', userId: null });
+  });
+
+  it('keeps the member id when the pushed sender type is User', () => {
+    expect(
+      resolveChatEntry({
+        conversationId: '12',
+        otherUserData: { id: 5, type: 'User' },
+      })
+    ).toEqual({ kind: 'conversationId', conversationId: '12', userId: 5 });
+  });
+
   it('accepts a numeric conversationId and no user', () => {
     expect(resolveChatEntry({ conversationId: 12 })).toEqual({
       kind: 'conversationId',

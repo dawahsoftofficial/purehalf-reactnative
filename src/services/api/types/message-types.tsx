@@ -242,6 +242,11 @@ export type MessageSentEventData = {
     created_at: string;
     statuses?: MessageStatus[];
     audio?: MessageAudio | null;
+    /**
+     * True when the server shortened `body` to stay under Pusher's 10KB
+     * payload limit; fetch the message list for the full text.
+     */
+    truncated?: boolean;
   };
   conversation: {
     id: number;

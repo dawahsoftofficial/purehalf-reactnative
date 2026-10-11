@@ -123,6 +123,7 @@ class GApiServices {
         fcm_token: token,
         device_type: !isIOS ? 0 : 1,
       });
+      await setData(storageKeys.FCM_TOKEN_UPLOADED, token);
       return true;
     } catch (error) {
       console.log(

@@ -52,8 +52,16 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
     : null;
 
 export function resolveChatEntry(params: RouteParams): ChatEntry {
+  // A push from staff/support carries the sender's Admin id; looking that up
+  // as a member id would query the wrong person, so it is not a member hint.
+  const senderType = params?.otherUserData?.type;
+  const senderIsMember =
+    typeof senderType !== 'string' ||
+    senderType.trim() === '' ||
+    senderType === 'User';
   const userId =
-    toPositiveInt(params?.userId) ?? toPositiveInt(params?.otherUserData?.id);
+    toPositiveInt(params?.userId) ??
+    (senderIsMember ? toPositiveInt(params?.otherUserData?.id) : null);
 
   const raw =
     asRecord(params?.conversationData) ?? asRecord(params?.convDetails);

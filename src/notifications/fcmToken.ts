@@ -14,3 +14,14 @@ export function isUsableFcmToken(token: unknown): token is string {
 export function fcmTokenForUpload(token: unknown): string | undefined {
   return isUsableFcmToken(token) ? token : undefined;
 }
+
+/**
+ * Whether `token` should be uploaded: it is a real token (never the
+ * placeholder) and differs from the one last uploaded.
+ */
+export function shouldUploadFcmToken(
+  token: unknown,
+  lastUploaded: unknown
+): token is string {
+  return isUsableFcmToken(token) && token !== lastUploaded;
+}

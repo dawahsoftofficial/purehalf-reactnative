@@ -52,6 +52,7 @@ import {
   useChatResolution,
 } from './hooks/useChatResolution';
 import { useSendMessage } from './hooks/useSendMessage';
+import { mergeNewestPage } from './mergeMessages';
 import Styles from './SingleChat.styles';
 import SingleChatHeader from './SingleChatHeader';
 
@@ -63,6 +64,9 @@ type ChatAudioPlaybackState = {
 };
 
 const MESSAGES_PAGE_SIZE = 50;
+
+/** While Pusher is not connected, poll the open thread this often. */
+const OFFLINE_POLL_INTERVAL_MS = 15000;
 
 const isRateLimitError = (error: unknown): boolean => {
   if (typeof error === 'string') {
@@ -152,6 +156,8 @@ const SingleChat = (props: any) => {
   const [isOtherUserTyping, setIsOtherUserTyping] = useState(false);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unsubscribeConversationRef = useRef<(() => void) | null>(null);
+  // Bumped on every (re)subscribe and on teardown; see setupPusherListeners.
+  const subscribeGenerationRef = useRef(0);
   const lastTypingEventRef = useRef<number>(0);
   // Track which messages have been marked as read to avoid duplicate API calls
   const markedAsReadRef = useRef<Set<number>>(new Set());
@@ -347,6 +353,43 @@ const SingleChat = (props: any) => {
     }
   }, [conversationId]);
 
+  // Catch-up: fetches the newest page and merges it into what is on screen,
+  // without touching the loader. Used after the app returns to the foreground,
+  // after Pusher reconnects, as an offline poll, and when a pushed message body
+  // was truncated. Safe to call any time; overlapping calls collapse.
+  const isCatchingUpRef = useRef<boolean>(false);
+  const refreshNewestMessages = useCallback(async () => {
+    if (!conversationId) return;
+    const conversationIdNum = parseInt(conversationId, 10);
+    if (isNaN(conversationIdNum)) return;
+    // The initial load (or a retry) is already fetching the same page.
+    if (isFetchingMessagesRef.current || isCatchingUpRef.current) return;
+
+    isCatchingUpRef.current = true;
+    try {
+      const fetched = await messageServices.getConversationMessages(
+        conversationIdNum,
+        { per_page: MESSAGES_PAGE_SIZE, page: 1 }
+      );
+      // The screen moved to another conversation while this was in flight.
+      if (activeConversationIdRef.current !== conversationId) return;
+      setMessages((previous) => {
+        const merged = mergeNewestPage(previous, fetched);
+        messagesRef.current = merged;
+        return merged;
+      });
+    } catch (error: unknown) {
+      // Best-effort: the next trigger tries again.
+      console.error('[SingleChat.refreshNewestMessages] Error:', error);
+    } finally {
+      isCatchingUpRef.current = false;
+    }
+  }, [conversationId]);
+  const refreshNewestMessagesRef = useRef(refreshNewestMessages);
+  useEffect(() => {
+    refreshNewestMessagesRef.current = refreshNewestMessages;
+  }, [refreshNewestMessages]);
+
   // Store handler refs (will be initialized after handlers are defined)
   const handleNewMessageRef = useRef<
     ((data: MessageSentEventData['message']) => void) | null
@@ -363,10 +406,13 @@ const SingleChat = (props: any) => {
 
   // Setup Pusher real-time listeners for this conversation
   const setupPusherListeners = useCallback(async () => {
-    if (!conversationId || !pusherService.isReady()) {
-      console.log('[SingleChat] Pusher not ready or no conversation ID');
+    if (!conversationId) {
+      console.log('[SingleChat] No conversation ID');
       return;
     }
+    // Invalidates a still-pending subscribe from an earlier call / screen
+    // state, so it unsubscribes itself instead of leaking.
+    const generation = (subscribeGenerationRef.current += 1);
 
     // M6 fix: if a previous subscription is still active (e.g. the screen
     // re-mounted with the same conversationId or the effect re-ran), unsubscribe
@@ -393,6 +439,8 @@ const SingleChat = (props: any) => {
       // Subscribe to conversation channel: conversation.{conversation-id}
       const channelName = `private-conversation.${conversationId}`;
 
+      // Requested even before Pusher is connected: pusherService fulfils it
+      // on connect / reconnect.
       const unsubscribe = await pusherService.subscribeToChannel(
         channelName,
         (event) => {
@@ -435,6 +483,11 @@ const SingleChat = (props: any) => {
                   handleNewMessageRef.current(
                     messageData as MessageSentEventData['message']
                   );
+                }
+                // The server shortened the body to fit Pusher's size limit;
+                // the list endpoint has the full text.
+                if (messageData.truncated === true) {
+                  void refreshNewestMessagesRef.current();
                 }
                 break;
               }
@@ -498,6 +551,10 @@ const SingleChat = (props: any) => {
         }
       );
 
+      if (generation !== subscribeGenerationRef.current) {
+        unsubscribe();
+        return;
+      }
       unsubscribeConversationRef.current = unsubscribe;
       console.log('[SingleChat] ✅ Subscribed to conversation channel');
 
@@ -1053,7 +1110,8 @@ const SingleChat = (props: any) => {
       setupPusherListeners();
 
       return () => {
-        // Cleanup Pusher subscription
+        // Cleanup Pusher subscription (and cancel one still being created)
+        subscribeGenerationRef.current += 1;
         if (unsubscribeConversationRef.current) {
           unsubscribeConversationRef.current();
           unsubscribeConversationRef.current = null;
@@ -1067,6 +1125,45 @@ const SingleChat = (props: any) => {
       };
     }
   }, [conversationId]);
+
+  // Catch up on messages that arrived while the phone was locked/offline:
+  // when the app returns to the foreground and when Pusher reconnects.
+  useEffect(() => {
+    const appStateSubscription = AppState.addEventListener(
+      'change',
+      (state: AppStateStatus) => {
+        if (state === 'active') void refreshNewestMessagesRef.current();
+      }
+    );
+    const removeConnectionListener = pusherService.addConnectionListener(
+      (currentState, previousState) => {
+        if (currentState === 'CONNECTED' && previousState !== 'CONNECTED') {
+          void refreshNewestMessagesRef.current();
+        }
+      }
+    );
+    return () => {
+      appStateSubscription.remove();
+      removeConnectionListener();
+    };
+  }, []);
+
+  // While this chat is focused and Pusher is not connected, poll the newest
+  // page so the thread still updates.
+  useFocusEffect(
+    useCallback(() => {
+      if (!conversationId) return undefined;
+      const timer = setInterval(() => {
+        if (
+          AppState.currentState === 'active' &&
+          pusherService.getConnectionState() !== 'CONNECTED'
+        ) {
+          void refreshNewestMessagesRef.current();
+        }
+      }, OFFLINE_POLL_INTERVAL_MS);
+      return () => clearInterval(timer);
+    }, [conversationId])
+  );
 
   // Mark all unread messages as read individually when screen is focused
   useFocusEffect(

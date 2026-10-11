@@ -1,13 +1,9 @@
 import { useFocusEffect } from '@react-navigation/native';
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  AppState,
+  type AppStateStatus,
   Dimensions,
   Image,
   StyleSheet,
@@ -45,10 +41,8 @@ import type {
   Conversation,
   ConversationUpdatedEventData,
   NewConversationCreatedEventData,
-  UnreadConversationCounterEventData,
 } from '../../services/api/types/message-types';
 import { presentChatCreditsPaywall } from '../../services/paywall-service';
-import { useConversationStore } from '../../stores';
 import NotificationPermissionBanner from './components/notification-permission-banner';
 import { isLastMessageReadByParticipant } from './SingleChat.utils';
 
@@ -76,9 +70,8 @@ const Messages = (props: MessagesProps) => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const { setData, storageKeys } = StorageManager;
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const { currentUser, updateCurrentUser, language } = useGlobalContext();
-  const unsubscribeUserChannelRef = useRef<(() => void) | null>(null);
-  const subscribedUserIdRef = useRef<string | number | null>(null);
 
   const pinnedConversations = useMemo(() => {
     const supportConversations: Conversation[] = [];
@@ -106,10 +99,6 @@ const Messages = (props: MessagesProps) => {
     }
   }, []);
 
-  // Get store actions
-  const setUnreadCounts = useConversationStore(
-    (state) => state.setUnreadCounts
-  );
   // Handle new conversation created event
   const handleNewConversationCreated = useCallback(
     (data: NewConversationCreatedEventData) => {
@@ -208,179 +197,105 @@ const Messages = (props: MessagesProps) => {
     []
   );
 
-  // Handle unread conversation counter event
-  const handleUnreadConversationCounter = useCallback(
-    (data: UnreadConversationCounterEventData) => {
-      const { participant } = data;
-      const unreadConversationsCount =
-        participant.unread_conversations_count || 0;
-      const unreadMessagesCount =
-        typeof participant.unread_messages_count === 'string'
-          ? parseInt(participant.unread_messages_count, 10) || 0
-          : participant.unread_messages_count || 0;
-
-      console.log(
-        '[Messages] Unread conversation counter updated:',
-        unreadConversationsCount,
-        'conversations,',
-        unreadMessagesCount,
-        'messages'
-      );
-
-      setUnreadCounts(unreadConversationsCount, unreadMessagesCount);
-    },
-    [setUnreadCounts]
-  );
-
   // Extract userId using useMemo to avoid unnecessary re-renders
   const userId = useMemo(() => {
     return currentUser?.id;
   }, [currentUser?.id]);
 
-  // Setup Pusher real-time updates for user channel
-  const setupPusherListeners = useCallback(async () => {
-    if (!pusherService.isReady()) {
-      console.log('[Messages] Pusher not ready');
-      return;
-    }
+  // Inbox events. Unread counters are NOT handled here: the app-wide
+  // useUserCountersChannel owns them (and the inbox channel never carries
+  // them).
+  const handleInboxEvent = useCallback(
+    (event: { eventName: string; data?: unknown }) => {
+      try {
+        const rawData =
+          typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
 
-    if (!userId) {
-      console.log('[Messages] No user ID available');
-      // Cleanup if we were subscribed to a different user
-      if (
-        unsubscribeUserChannelRef.current &&
-        subscribedUserIdRef.current !== userId
-      ) {
-        unsubscribeUserChannelRef.current();
-        unsubscribeUserChannelRef.current = null;
-        subscribedUserIdRef.current = null;
-      }
-      return;
-    }
-
-    // If already subscribed to the same user, don't resubscribe
-    if (
-      subscribedUserIdRef.current === userId &&
-      unsubscribeUserChannelRef.current
-    ) {
-      console.log(
-        '[Messages] Already subscribed to inbox channel for user:',
-        userId
-      );
-      return;
-    }
-
-    try {
-      // Cleanup previous subscription if switching users
-      if (
-        unsubscribeUserChannelRef.current &&
-        subscribedUserIdRef.current !== userId
-      ) {
-        console.log(
-          '[Messages] Unsubscribing from previous user:',
-          subscribedUserIdRef.current
-        );
-        unsubscribeUserChannelRef.current();
-        unsubscribeUserChannelRef.current = null;
-      }
-
-      console.log('[Messages] Setting up Pusher for user:', userId);
-
-      // Subscribe to user inbox channel: private-user.inbox.{userId}
-      const inboxChannelName = `private-user.inbox.${userId}`;
-
-      const unsubscribeInbox = await pusherService.subscribeToChannel(
-        inboxChannelName,
-        (event) => {
-          console.log('[Messages] Pusher event received:', event.eventName);
-
-          try {
-            const rawData =
-              typeof event.data === 'string'
-                ? JSON.parse(event.data)
-                : event.data;
-
-            // Extract event type from Laravel event class name or from data.event
-            let eventType = event.eventName;
-            if (eventType.includes('\\')) {
-              // Laravel event class name format: App\Events\Conversation\MessageSent
-              eventType = eventType.split('\\').pop() || eventType;
-            }
-
-            // If data has an 'event' field, use that as the event type
-            if (rawData?.event) {
-              eventType = rawData.event;
-            }
-
-            console.log('[Messages] Normalized event type:', eventType);
-
-            // Handle different event types
-            if (eventType === 'NewConversationCreated') {
-              console.log('[Messages] New conversation created:', rawData);
-              handleNewConversationCreated(
-                rawData as NewConversationCreatedEventData
-              );
-            } else if (eventType === 'ConversationUpdated') {
-              console.log('[Messages] Conversation updated:', rawData);
-              handleConversationUpdated(
-                rawData as ConversationUpdatedEventData
-              );
-            } else if (eventType === 'UnreadConversationCounter') {
-              console.log('[Messages] Unread conversation counter:', rawData);
-              handleUnreadConversationCounter(
-                rawData as UnreadConversationCounterEventData
-              );
-            } else {
-              console.log(
-                '[Messages] Ignoring event on user channel:',
-                eventType
-              );
-            }
-          } catch (error) {
-            console.error('[Messages] Error handling Pusher event:', error);
-          }
+        // Extract event type from Laravel event class name or from data.event
+        let eventType = event.eventName;
+        if (eventType.includes('\\')) {
+          // Laravel event class name format: App\Events\Conversation\MessageSent
+          eventType = eventType.split('\\').pop() || eventType;
         }
-      );
 
-      unsubscribeUserChannelRef.current = unsubscribeInbox;
-      subscribedUserIdRef.current = userId;
-      console.log('[Messages] ✅ Subscribed to user inbox channel');
-    } catch (error) {
-      console.error('[Messages] Error setting up Pusher:', error);
-      subscribedUserIdRef.current = null;
-    }
-  }, [
-    userId,
-    handleNewConversationCreated,
-    handleConversationUpdated,
-    handleUnreadConversationCounter,
-  ]);
+        // If data has an 'event' field, use that as the event type
+        if (rawData?.event) {
+          eventType = rawData.event;
+        }
 
-  // Setup Pusher when component mounts and screen is focused
-  useEffect(() => {
-    if (userId) {
-      setupPusherListeners();
-
-      return () => {
-        // Only cleanup on unmount or when userId actually changes
-        // This cleanup will run when the component unmounts or userId changes
-        if (
-          unsubscribeUserChannelRef.current &&
-          subscribedUserIdRef.current !== userId
-        ) {
-          console.log(
-            '[Messages] Cleanup: Unsubscribing from user:',
-            subscribedUserIdRef.current
+        if (eventType === 'NewConversationCreated') {
+          handleNewConversationCreated(
+            rawData as NewConversationCreatedEventData
           );
-          unsubscribeUserChannelRef.current();
-          unsubscribeUserChannelRef.current = null;
-          subscribedUserIdRef.current = null;
+        } else if (eventType === 'ConversationUpdated') {
+          handleConversationUpdated(rawData as ConversationUpdatedEventData);
         }
-      };
+      } catch (error) {
+        console.error('[Messages] Error handling Pusher event:', error);
+      }
+    },
+    [handleNewConversationCreated, handleConversationUpdated]
+  );
+
+  // Subscribe to the user inbox channel: private-user.inbox.{userId}.
+  // The subscription is requested even before Pusher is connected (it is
+  // fulfilled when it connects / reconnects), and the exact subscriber is
+  // removed on cleanup so nothing leaks across unmounts or user changes.
+  useEffect(() => {
+    if (!userId) return undefined;
+
+    let cancelled = false;
+    let unsubscribe: (() => void) | null = null;
+
+    pusherService
+      .subscribeToChannel(`private-user.inbox.${userId}`, handleInboxEvent)
+      .then((remove) => {
+        if (cancelled) {
+          remove();
+        } else {
+          unsubscribe = remove;
+        }
+      })
+      .catch((error) => {
+        console.error('[Messages] Error setting up Pusher:', error);
+      });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+      unsubscribe = null;
+    };
+  }, [userId, handleInboxEvent]);
+
+  // Catch up on anything missed while backgrounded or offline.
+  useEffect(() => {
+    const appStateSubscription = AppState.addEventListener(
+      'change',
+      (state: AppStateStatus) => {
+        if (state === 'active') void fetchConversations();
+      }
+    );
+    const removeConnectionListener = pusherService.addConnectionListener(
+      (currentState, previousState) => {
+        if (currentState === 'CONNECTED' && previousState !== 'CONNECTED') {
+          void fetchConversations();
+        }
+      }
+    );
+    return () => {
+      appStateSubscription.remove();
+      removeConnectionListener();
+    };
+  }, [fetchConversations]);
+
+  const onRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await fetchConversations();
+    } finally {
+      setIsRefreshing(false);
     }
-    // Only depend on userId to avoid resubscribing when currentUser object reference changes
-    // but userId remains the same
-  }, [userId, setupPusherListeners]);
+  }, [fetchConversations]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -664,7 +579,7 @@ const Messages = (props: MessagesProps) => {
             visible={true}
             style={{ height: hp(60) }}
           />
-        ) : pinnedConversations.length ? (
+        ) : (
           <VirtualizedList
             initialNumToRender={10}
             windowSize={15}
@@ -674,9 +589,12 @@ const Messages = (props: MessagesProps) => {
             renderItem={renderConversations}
             ListEmptyComponent={renderEmptyList}
             keyExtractor={keyExtractor}
+            refreshing={isRefreshing}
+            onRefresh={onRefresh}
+            contentContainerStyle={
+              pinnedConversations.length ? undefined : Styles.emptyListContent
+            }
           />
-        ) : (
-          renderEmptyList()
         )}
       </View>
       <Ripple style={Styles.btnPlus} onPress={onFindMatchPress}>
@@ -695,6 +613,10 @@ const Styles = StyleSheet.create({
   contentContainer: {
     flex: 1,
     backgroundColor: Colors.surface,
+  },
+  // keeps the empty state centred while the list is still pull-to-refreshable
+  emptyListContent: {
+    flexGrow: 1,
   },
   // conversation row
   itemContainer: {
