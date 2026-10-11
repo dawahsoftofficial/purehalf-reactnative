@@ -25,6 +25,7 @@ import { StorageManager } from '../storageManager';
 import BaseUrl from './BaseUrl';
 import EndPoints from './EndPoints';
 import { Api } from './Middleware';
+import { buildPhoneAuthPayload } from './phone-auth';
 import type {
   CurrentUserDetail,
   GetCurrentUserDetailResponse,
@@ -548,11 +549,28 @@ class GApiServices {
   loginUser = async (phoneNumber: any, onLogin: any) => {
     return new Promise(async (resolve, reject) => {
       const fcmToken = await this.getValidFcmToken();
-      Api.post(EndPoints.authenticate, {
-        phone_number: phoneNumber,
-        fcm_token: fcmTokenForUpload(fcmToken),
-        device_type: !isIOS ? 0 : 1,
-      })
+      // The server requires the Firebase ID token as proof the number was
+      // verified; without it /authenticate returns 401 and the 401 handler
+      // sends the member back to the login screen.
+      let firebaseIdToken: string;
+      try {
+        if (!auth.currentUser) throw new Error('No Firebase user after OTP');
+        firebaseIdToken = await getIdToken(auth.currentUser, true);
+      } catch (error) {
+        console.log('error while reading Firebase ID token =>', error);
+        flashErrorMessage();
+        reject('');
+        return;
+      }
+      Api.post(
+        EndPoints.authenticate,
+        buildPhoneAuthPayload({
+          phoneNumber,
+          firebaseIdToken,
+          fcmToken,
+          isIOS,
+        })
+      )
         .then(async (apiRes: any) => {
           const apiResult = apiRes?.data?.results;
           await setData(storageKeys.USER, apiResult);
