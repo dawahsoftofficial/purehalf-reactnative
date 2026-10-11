@@ -1,3 +1,5 @@
+import { buildChatRouteParams } from './pushPayload';
+
 export type NotificationRouteData = {
   notification_type?: string | null;
   id?: number | string;
@@ -49,9 +51,15 @@ export const routeNotification = async (
     case 'new_male_signups':
       navigation.navigate('Welcome');
       break;
-    case 'new_message':
-      navigation.navigate('Messages');
+    case 'new_message': {
+      const params = buildChatRouteParams(data);
+      if (params) {
+        navigation.navigate('SingleChat', params);
+      } else {
+        navigation.navigate('Messages');
+      }
       break;
+    }
     case 'app_update':
       try {
         await deps.openAppStore?.();

@@ -10,6 +10,7 @@ import {
   getMessaging,
   getToken,
   isDeviceRegisteredForRemoteMessages,
+  onTokenRefresh,
   registerDeviceForRemoteMessages,
   requestPermission,
 } from '@react-native-firebase/messaging';
@@ -18,6 +19,7 @@ import {
   type SignInResponse,
 } from '@react-native-google-signin/google-signin';
 
+import { isUsableFcmToken } from '../../notifications/fcmToken';
 import { flashErrorMessage } from '../FlashMessages';
 import { StorageManager } from '../storageManager';
 const { storageKeys, setData } = StorageManager;
@@ -143,6 +145,16 @@ class GFirebase {
       console.log('Error while getting FCM token =>', error);
       return 'FcmToken';
     }
+  };
+
+  /**
+   * Subscribes to FCM token rotation. The callback only ever receives a real
+   * token. Returns the unsubscribe function.
+   */
+  onFcmTokenRefresh = (callback: (token: string) => void) => {
+    return onTokenRefresh(messaging, (token) => {
+      if (isUsableFcmToken(token)) callback(token);
+    });
   };
 
   sendMessageNotification = async (token: any, data: any) => {

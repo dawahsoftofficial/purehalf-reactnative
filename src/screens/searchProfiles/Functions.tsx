@@ -128,6 +128,8 @@ const getFilterItemLabel = (id: any) => {
       return LanguageKeys.educationLevel;
     case 'has_profile_picture':
       return LanguageKeys.hasprofilePicture;
+    case 'open_for_polygamy':
+      return LanguageKeys.availableForSecondMarriage;
     case 'prayers_punctuality_id':
       return LanguageKeys.prayersPunctuality;
     case 'islamic_practice_level_id':

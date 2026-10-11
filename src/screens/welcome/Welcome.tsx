@@ -9,7 +9,14 @@ import React, {
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  DeviceEventEmitter,
+  Image,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import Ripple from 'react-native-material-ripple';
 import {
   Menu,
@@ -40,6 +47,7 @@ import {
 import { hp, Typography, wp } from '../../global';
 import { CheckRtl, LanguageKeys } from '../../languages';
 import { CommonActions } from '../../navigation';
+import { LIKED_YOU_PRESS_EVENT } from '../../notifications/pushEvents';
 import { Colors, Fonts } from '../../res';
 import {
   ApiServices,
@@ -548,66 +556,23 @@ const Welcome: React.FC<WelcomeProps> = ({ navigation, route }) => {
     });
   }, [activeOptionButton?.value, getUsers, loadMoreLoader, optionBarList]);
 
-  const navigateToChat = useCallback(
-    (data: any) => {
-      if (data?.conversationId) {
-        navigation.navigate('SingleChat', {
-          from: 'notification',
-          conversationId: data?.conversationId,
-          message: data?.message,
-          otherUserData: data?.user,
-        });
-      }
-    },
-    [navigation]
-  );
-
-  const notifeeBackForHandler = useCallback(
-    async ({ type, detail }: any) => {
-      if (!isIOS) {
-        if (type === 1) {
-          if (detail?.pressAction?.id === 'openChat') {
-            const data = detail?.notification?.data;
-            navigateToChat(data);
-            await notifee.cancelNotification(detail.notification.id);
-          } else if (detail?.pressAction?.id === 'my_liked_you_tab') {
-            await onOptionPress({
-              name: LanguageKeys.likedYou,
-              value: '1',
-            });
-            await notifee.cancelNotification(detail.notification.id);
-          }
-        }
-      } else if (detail?.pressAction) {
-        const pressAction = detail?.notification?.data?.pressAction;
-        if (pressAction === 'openChat') {
-          const data = detail?.notification?.data;
-          navigateToChat(data);
-          await notifee.cancelNotification(detail.notification.id);
-        } else if (pressAction === 'my_liked_you_tab') {
-          await onOptionPress({
-            name: LanguageKeys.likedYou,
-            value: '1',
-          });
-          await notifee.cancelNotification(detail.notification.id);
-        }
-      }
-    },
-    [navigateToChat, onOptionPress]
+  // Chat pushes are routed centrally (usePushHandlers / index.js ->
+  // pendingPush); this screen only owns the "liked you" tab shortcut.
+  const openLikedYouTab = useCallback(
+    () =>
+      onOptionPress({
+        name: LanguageKeys.likedYou,
+        value: '1',
+      }),
+    [onOptionPress]
   );
 
   const getInitialNotification = useCallback(async () => {
     const initialNotification: any = await notifee.getInitialNotification();
-    if (initialNotification?.pressAction?.id === 'openChat') {
-      const data = initialNotification?.notification?.data;
-      navigateToChat(data);
-    } else if (initialNotification?.pressAction?.id === 'my_liked_you_tab') {
-      await onOptionPress({
-        name: LanguageKeys.likedYou,
-        value: '1',
-      });
+    if (initialNotification?.pressAction?.id === 'my_liked_you_tab') {
+      await openLikedYouTab();
     }
-  }, [navigateToChat, onOptionPress]);
+  }, [openLikedYouTab]);
 
   const handleProfileCompleteData = useCallback(async () => {
     const baseState: Record<string, boolean> = {
@@ -692,17 +657,15 @@ const Welcome: React.FC<WelcomeProps> = ({ navigation, route }) => {
 
   useEffect(() => {
     getInitialNotification();
-    const unsubscribeForeground = notifee.onForegroundEvent(
-      notifeeBackForHandler
+    // Taps on a "liked you" notification arrive via the background handler
+    // registered in index.js, which forwards them here.
+    const subscription = DeviceEventEmitter.addListener(
+      LIKED_YOU_PRESS_EVENT,
+      openLikedYouTab
     );
-    notifee.onBackgroundEvent(notifeeBackForHandler);
 
-    return () => {
-      if (typeof unsubscribeForeground === 'function') {
-        unsubscribeForeground();
-      }
-    };
-  }, [getInitialNotification, notifeeBackForHandler]);
+    return () => subscription.remove();
+  }, [getInitialNotification, openLikedYouTab]);
 
   const onBoostProfilePress = useCallback(async () => {
     setIsBoostLoading(true);

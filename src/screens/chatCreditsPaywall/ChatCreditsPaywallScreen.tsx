@@ -41,6 +41,7 @@ type Props = {
   navigation?: {
     canGoBack?: () => boolean;
     goBack?: () => void;
+    addListener?: (event: 'beforeRemove', callback: () => void) => () => void;
   };
   route?: {
     params?: {
@@ -142,6 +143,26 @@ export default function ChatCreditsPaywallScreen({ navigation, route }: Props) {
     },
     [closeScreen, onComplete]
   );
+
+  // The promise returned by presentChatCreditsPaywall() must settle even when
+  // the screen is dismissed without using our buttons (hardware back, swipe
+  // back gesture, navigation reset). Otherwise callers awaiting it hang.
+  // completedRef makes this settle exactly once alongside complete().
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
+
+  const settleAsCancelled = useCallback(() => {
+    if (completedRef.current) return;
+    completedRef.current = true;
+    onCompleteRef.current?.(CANCELLED_RESULT);
+  }, []);
+
+  useEffect(() => {
+    return navigation?.addListener?.('beforeRemove', settleAsCancelled);
+  }, [navigation, settleAsCancelled]);
+
+  // Fallback for removals that don't emit beforeRemove: settle on unmount.
+  useEffect(() => settleAsCancelled, [settleAsCancelled]);
 
   useEffect(() => {
     let mounted = true;

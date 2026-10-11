@@ -1,5 +1,5 @@
 import { useFocusEffect } from '@react-navigation/native';
-import React, { memo, useCallback, useState } from 'react';
+import React, { memo, useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AppState, Modal, StyleSheet, View } from 'react-native';
 import Ripple from 'react-native-material-ripple';
@@ -15,6 +15,7 @@ import {
   requestNotificationPermission,
 } from '../../../notifications';
 import { Colors, Fonts } from '../../../res';
+import { ApiServices } from '../../../services';
 
 function NotificationPermissionBanner() {
   const Rtl = CheckRtl();
@@ -25,14 +26,28 @@ function NotificationPermissionBanner() {
   const [isRequesting, setIsRequesting] = useState(false);
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
 
+  // Last status seen, to spot the moment permission flips to granted.
+  const lastStatusRef = useRef<NotificationPermissionStatus | null>(null);
+
+  // Permission just became granted (prompt accepted, or enabled from device
+  // settings): the token may never have been uploaded, so fetch and upload it.
+  const noteStatus = useCallback((status: NotificationPermissionStatus) => {
+    const previous = lastStatusRef.current;
+    lastStatusRef.current = status;
+    if (status === 'granted' && previous !== null && previous !== 'granted') {
+      void ApiServices.syncFcmToken();
+    }
+  }, []);
+
   const refreshPermissionStatus = useCallback(async () => {
     const status = await getNotificationPermissionStatus();
     setPermissionStatus(status);
+    noteStatus(status);
 
     if (status === 'granted') {
       setSettingsModalVisible(false);
     }
-  }, []);
+  }, [noteStatus]);
 
   useFocusEffect(
     useCallback(() => {
@@ -71,6 +86,7 @@ function NotificationPermissionBanner() {
     try {
       const requestedStatus = await requestNotificationPermission();
       setPermissionStatus(requestedStatus);
+      noteStatus(requestedStatus);
 
       if (requestedStatus === 'granted') {
         setSettingsModalVisible(false);
@@ -79,7 +95,7 @@ function NotificationPermissionBanner() {
     } finally {
       setIsRequesting(false);
     }
-  }, [isRequesting, permissionStatus, refreshPermissionStatus]);
+  }, [isRequesting, noteStatus, permissionStatus, refreshPermissionStatus]);
 
   if (
     permissionStatus === 'checking' ||

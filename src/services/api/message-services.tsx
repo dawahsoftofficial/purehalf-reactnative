@@ -1,11 +1,14 @@
+import { ChatApiError, toChatApiError } from './chat-errors';
 import EndPoints from './EndPoints';
 import { Api } from './Middleware';
 import type {
   Conversation,
   GetConversationMessagesParams,
   GetConversationMessagesResponse,
+  GetConversationResponse,
   GetConversationsListParams,
   GetConversationsListResponse,
+  GetConversationWithUserResponse,
   GetMessageAudioUrlResponse,
   Message,
   ReportMessagePayload,
@@ -15,6 +18,8 @@ import type {
   StartConversationPayload,
   StartConversationResponse,
 } from './types/message-types';
+
+const AUDIO_UPLOAD_TIMEOUT_MS = 60000;
 
 /**
  * Message Services
@@ -67,7 +72,12 @@ class MessageServices {
               '[MessageServices.startConversation] API returned error:',
               data?.message || 'Unknown error'
             );
-            reject(data?.message || 'Failed to start conversation');
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to start conversation'
+              )
+            );
             return;
           }
 
@@ -75,33 +85,112 @@ class MessageServices {
           if (data?.results) {
             resolve(data.results);
           } else {
-            reject('Invalid response structure');
+            reject(new ChatApiError('UNKNOWN', 'Invalid response structure'));
           }
         })
         .catch((error) => {
-          const errorMessage =
-            error?.response?.data?.results || 'Failed to start conversation';
+          const chatError = toChatApiError(error);
+          const errorMessage = chatError.message;
 
           console.error('[MessageServices.startConversation] Error:', {
             message: errorMessage,
             status: error?.response?.status,
             data: error?.response?.data,
           });
-          reject(errorMessage);
+          reject(chatError);
         });
     });
   };
 
   /**
-   * Gets list of conversations for the authenticated user
+   * Looks up the caller's private conversation with a member.
+   * @param userId - The other member's user id
+   * @returns Promise resolving to the conversation, or null when none exists
+   */
+  getConversationWithUser = (userId: number | string) => {
+    return new Promise<Conversation | null>((resolve, reject) => {
+      Api.get(EndPoints.getConversationWithUser(userId))
+        .then((response) => {
+          const data = response.data as GetConversationWithUserResponse;
+
+          if (data?.error === true) {
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to look up conversation'
+              )
+            );
+            return;
+          }
+
+          resolve(data?.results ?? null);
+        })
+        .catch((error) => {
+          const chatError = toChatApiError(error);
+          console.error('[MessageServices.getConversationWithUser] Error:', {
+            message: chatError.message,
+            status: error?.response?.status,
+            data: error?.response?.data,
+          });
+          reject(chatError);
+        });
+    });
+  };
+
+  /**
+   * Fetches one conversation the caller participates in (participants, block
+   * flags, deleted-member state). Used to open a chat from only its id.
+   * @param conversationId - Conversation ID
+   * @returns Promise resolving to the conversation
+   */
+  getConversation = (conversationId: number | string) => {
+    return new Promise<Conversation>((resolve, reject) => {
+      Api.get(EndPoints.getConversation(conversationId))
+        .then((response) => {
+          const data = response.data as GetConversationResponse;
+
+          if (data?.error === true) {
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to fetch conversation'
+              )
+            );
+            return;
+          }
+
+          if (data?.results) {
+            resolve(data.results);
+          } else {
+            reject(new ChatApiError('UNKNOWN', 'Invalid response structure'));
+          }
+        })
+        .catch((error) => {
+          const chatError = toChatApiError(error);
+          console.error('[MessageServices.getConversation] Error:', {
+            message: chatError.message,
+            status: error?.response?.status,
+            data: error?.response?.data,
+          });
+          reject(chatError);
+        });
+    });
+  };
+
+  /**
+   * Gets one page of the authenticated user's conversations. The response has
+   * no total: keep requesting the next page until one comes back with fewer
+   * than `per_page` items.
    * @param params - Optional query parameters
    * @param params.per_page - Number of items per page (default: 20)
+   * @param params.page - 1-based page number (default: 1)
    * @returns Promise resolving to array of conversation objects
    */
   getConversationsList = (params?: GetConversationsListParams) => {
     return new Promise<Conversation[]>((resolve, reject) => {
       const queryParams = {
         per_page: params?.per_page || 20,
+        page: params?.page || 1,
       };
 
       Api.get(EndPoints.getConversationsList, { params: queryParams })
@@ -114,7 +203,12 @@ class MessageServices {
               '[MessageServices.getConversationsList] API returned error:',
               data?.message || 'Unknown error'
             );
-            reject(data?.message || 'Failed to fetch conversations');
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to fetch conversations'
+              )
+            );
             return;
           }
 
@@ -123,16 +217,14 @@ class MessageServices {
           resolve(results);
         })
         .catch((error) => {
-          const errorMessage =
-            error?.response?.data?.message ||
-            error?.message ||
-            'Failed to fetch conversations';
+          const chatError = toChatApiError(error);
+          const errorMessage = chatError.message;
           console.error('[MessageServices.getConversationsList] Error:', {
             message: errorMessage,
             status: error?.response?.status,
             data: error?.response?.data,
           });
-          reject(errorMessage);
+          reject(chatError);
         });
     });
   };
@@ -166,7 +258,12 @@ class MessageServices {
               '[MessageServices.getConversationMessages] API returned error:',
               data?.message || 'Unknown error'
             );
-            reject(data?.message || 'Failed to fetch messages');
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to fetch messages'
+              )
+            );
             return;
           }
 
@@ -175,16 +272,14 @@ class MessageServices {
           resolve(results);
         })
         .catch((error) => {
-          const errorMessage =
-            error?.response?.data?.message ||
-            error?.message ||
-            'Failed to fetch messages';
+          const chatError = toChatApiError(error);
+          const errorMessage = chatError.message;
           console.error('[MessageServices.getConversationMessages] Error:', {
             message: errorMessage,
             status: error?.response?.status,
             data: error?.response?.data,
           });
-          reject(errorMessage);
+          reject(chatError);
         });
     });
   };
@@ -203,7 +298,12 @@ class MessageServices {
     return new Promise<Message>((resolve, reject) => {
       Api.post(
         EndPoints.sendConversationMessage(conversationId),
-        this.buildSendPayload(payload)
+        this.buildSendPayload(payload),
+        // Voice notes upload a file, so give them more room than the 20s
+        // default before treating a slow connection as a failure.
+        ...(payload.type === 'audio'
+          ? [{ timeout: AUDIO_UPLOAD_TIMEOUT_MS }]
+          : [])
       )
         .then((response) => {
           const data = response.data as SendConversationMessageResponse;
@@ -214,7 +314,12 @@ class MessageServices {
               '[MessageServices.sendConversationMessage] API returned error:',
               data?.message || 'Unknown error'
             );
-            reject(data?.message || 'Failed to send message');
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to send message'
+              )
+            );
             return;
           }
 
@@ -222,23 +327,18 @@ class MessageServices {
           if (data?.results) {
             resolve(data.results);
           } else {
-            reject('Invalid response structure');
+            reject(new ChatApiError('UNKNOWN', 'Invalid response structure'));
           }
         })
         .catch((error) => {
-          const errorMessage =
-            error?.response?.data?.results || 'Failed to send message';
-          console.log(
-            'error while sending message =>',
-            error?.response?.data?.results,
-            errorMessage
-          );
+          const chatError = toChatApiError(error);
+          const errorMessage = chatError.message;
           console.error('[MessageServices.sendConversationMessage] Error:', {
             message: errorMessage,
             status: error?.response?.status,
             data: error?.response?.data,
           });
-          reject(errorMessage);
+          reject(chatError);
         });
     });
   };
@@ -261,23 +361,26 @@ class MessageServices {
                 '[MessageServices.getMessageAudioUrl] API returned error:',
                 data?.message || 'Unknown error'
               );
-              reject(data?.message || 'Failed to fetch audio URL');
+              reject(
+                new ChatApiError(
+                  'UNKNOWN',
+                  data?.message || 'Failed to fetch audio URL'
+                )
+              );
               return;
             }
 
             resolve(data.results);
           })
           .catch((error) => {
-            const errorMessage =
-              error?.response?.data?.message ||
-              error?.message ||
-              'Failed to fetch audio URL';
+            const chatError = toChatApiError(error);
+            const errorMessage = chatError.message;
             console.error('[MessageServices.getMessageAudioUrl] Error:', {
               message: errorMessage,
               status: error?.response?.status,
               data: error?.response?.data,
             });
-            reject(errorMessage);
+            reject(chatError);
           });
       }
     );
@@ -300,7 +403,12 @@ class MessageServices {
               '[MessageServices.clearConversation] API returned error:',
               data?.message || 'Unknown error'
             );
-            reject(data?.message || 'Failed to clear conversation');
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to clear conversation'
+              )
+            );
             return;
           }
 
@@ -308,16 +416,14 @@ class MessageServices {
           resolve();
         })
         .catch((error) => {
-          const errorMessage =
-            error?.response?.data?.message ||
-            error?.message ||
-            'Failed to clear conversation';
+          const chatError = toChatApiError(error);
+          const errorMessage = chatError.message;
           console.error('[MessageServices.clearConversation] Error:', {
             message: errorMessage,
             status: error?.response?.status,
             data: error?.response?.data,
           });
-          reject(errorMessage);
+          reject(chatError);
         });
     });
   };
@@ -339,7 +445,12 @@ class MessageServices {
               '[MessageServices.deleteConversation] API returned error:',
               data?.message || 'Unknown error'
             );
-            reject(data?.message || 'Failed to delete conversation');
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to delete conversation'
+              )
+            );
             return;
           }
 
@@ -347,16 +458,14 @@ class MessageServices {
           resolve();
         })
         .catch((error) => {
-          const errorMessage =
-            error?.response?.data?.message ||
-            error?.message ||
-            'Failed to delete conversation';
+          const chatError = toChatApiError(error);
+          const errorMessage = chatError.message;
           console.error('[MessageServices.deleteConversation] Error:', {
             message: errorMessage,
             status: error?.response?.status,
             data: error?.response?.data,
           });
-          reject(errorMessage);
+          reject(chatError);
         });
     });
   };
@@ -384,7 +493,12 @@ class MessageServices {
               '[MessageServices.blockConversationParticipant] API returned error:',
               data?.message || 'Unknown error'
             );
-            reject(data?.message || 'Failed to block participant');
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to block participant'
+              )
+            );
             return;
           }
 
@@ -392,10 +506,8 @@ class MessageServices {
           resolve();
         })
         .catch((error) => {
-          const errorMessage =
-            error?.response?.data?.message ||
-            error?.message ||
-            'Failed to block participant';
+          const chatError = toChatApiError(error);
+          const errorMessage = chatError.message;
           console.error(
             '[MessageServices.blockConversationParticipant] Error:',
             {
@@ -404,7 +516,7 @@ class MessageServices {
               data: error?.response?.data,
             }
           );
-          reject(errorMessage);
+          reject(chatError);
         });
     });
   };
@@ -433,17 +545,20 @@ class MessageServices {
               '[MessageServices.unblockConversationParticipant] API returned error:',
               data?.message || 'Unknown error'
             );
-            reject(data?.message || 'Failed to unblock participant');
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to unblock participant'
+              )
+            );
             return;
           }
 
           resolve();
         })
         .catch((error) => {
-          const errorMessage =
-            error?.response?.data?.message ||
-            error?.message ||
-            'Failed to unblock participant';
+          const chatError = toChatApiError(error);
+          const errorMessage = chatError.message;
           console.error(
             '[MessageServices.unblockConversationParticipant] Error:',
             {
@@ -452,7 +567,7 @@ class MessageServices {
               data: error?.response?.data,
             }
           );
-          reject(errorMessage);
+          reject(chatError);
         });
     });
   };
@@ -476,7 +591,12 @@ class MessageServices {
               '[MessageServices.reportMessage] API returned error:',
               data?.message || 'Unknown error'
             );
-            reject(data?.message || 'Failed to report message');
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to report message'
+              )
+            );
             return;
           }
 
@@ -484,16 +604,14 @@ class MessageServices {
           resolve();
         })
         .catch((error) => {
-          const errorMessage =
-            error?.response?.data?.message ||
-            error?.message ||
-            'Failed to report message';
+          const chatError = toChatApiError(error);
+          const errorMessage = chatError.message;
           console.error('[MessageServices.reportMessage] Error:', {
             message: errorMessage,
             status: error?.response?.status,
             data: error?.response?.data,
           });
-          reject(errorMessage);
+          reject(chatError);
         });
     });
   };
@@ -515,7 +633,12 @@ class MessageServices {
               '[MessageServices.markMessageAsRead] API returned error:',
               data?.message || 'Unknown error'
             );
-            reject(data?.message || 'Failed to mark message as read');
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to mark message as read'
+              )
+            );
             return;
           }
 
@@ -523,16 +646,14 @@ class MessageServices {
           resolve();
         })
         .catch((error) => {
-          const errorMessage =
-            error?.response?.data?.message ||
-            error?.message ||
-            'Failed to mark message as read';
+          const chatError = toChatApiError(error);
+          const errorMessage = chatError.message;
           console.error('[MessageServices.markMessageAsRead] Error:', {
             message: errorMessage,
             status: error?.response?.status,
             data: error?.response?.data,
           });
-          reject(errorMessage);
+          reject(chatError);
         });
     });
   };
@@ -554,7 +675,12 @@ class MessageServices {
               '[MessageServices.markAllMessagesAsRead] API returned error:',
               data?.message || 'Unknown error'
             );
-            reject(data?.message || 'Failed to mark all messages as read');
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to mark all messages as read'
+              )
+            );
             return;
           }
 
@@ -562,61 +688,14 @@ class MessageServices {
           resolve();
         })
         .catch((error) => {
-          const errorMessage =
-            error?.response?.data?.message ||
-            error?.message ||
-            'Failed to mark all messages as read';
+          const chatError = toChatApiError(error);
+          const errorMessage = chatError.message;
           console.error('[MessageServices.markAllMessagesAsRead] Error:', {
             message: errorMessage,
             status: error?.response?.status,
             data: error?.response?.data,
           });
-          reject(errorMessage);
-        });
-    });
-  };
-
-  /**
-   * Marks a message as delivered
-   * @param messageId - Message ID to mark as delivered
-   * @returns Promise resolving to void on success
-   */
-  markMessageDelivered = (messageId: number) => {
-    return new Promise<void>((resolve, reject) => {
-      Api.post(
-        EndPoints.markMessageDelivered(messageId),
-        {},
-        {
-          params: { messageid: messageId },
-        }
-      )
-        .then((response) => {
-          const data = response.data as StandardResponse;
-
-          // Validate response structure
-          if (data?.error === true) {
-            console.error(
-              '[MessageServices.markMessageDelivered] API returned error:',
-              data?.message || 'Unknown error'
-            );
-            reject(data?.message || 'Failed to mark message as delivered');
-            return;
-          }
-
-          // Resolve on success
-          resolve();
-        })
-        .catch((error) => {
-          const errorMessage =
-            error?.response?.data?.message ||
-            error?.message ||
-            'Failed to mark message as delivered';
-          console.error('[MessageServices.markMessageDelivered] Error:', {
-            message: errorMessage,
-            status: error?.response?.status,
-            data: error?.response?.data,
-          });
-          reject(errorMessage);
+          reject(chatError);
         });
     });
   };

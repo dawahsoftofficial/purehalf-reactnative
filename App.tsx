@@ -14,6 +14,7 @@ import {
   SafeAreaProvider,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
+import { useChatBadgeSync } from './src/services/chat/useChatBadgeSync';
 import { usePusher, useUserCountersChannel } from './src/services/pusher';
 import { PUSHER_API_KEY, PUSHER_CLUSTER, PUSHER_AUTH_ENDPOINT } from '@env';
 import { requestNotificationPermission } from './src/notifications';
@@ -39,6 +40,9 @@ const AppContent = (): JSX.Element => {
 
   // Subscribe to user counters channel globally
   useUserCountersChannel(currentUser, updateCurrentUser);
+
+  // Seed the unread badge from the API (launch, foreground, reconnect)
+  useChatBadgeSync(!!currentUser?.id && currentUser.id !== 'guardian');
 
   // Request notification permissions on app start
   useEffect(() => {

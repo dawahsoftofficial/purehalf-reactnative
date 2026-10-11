@@ -1,5 +1,11 @@
 import { useFocusEffect } from '@react-navigation/native';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
@@ -19,7 +25,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import pusherService from '@/services/pusher';
 import { evaluateAndMaybeShowRatingPrompt } from '@/services/rating/ratingEngagement';
 
-import { Container } from '../../components';
+import { ButtonPicker, Container } from '../../components';
 import { wp } from '../../global';
 import { CheckRtl, LanguageKeys } from '../../languages';
 import { Colors } from '../../res';
@@ -32,13 +38,20 @@ import {
 } from '../../services';
 import messageServices from '../../services/api/message-services';
 import type {
-  Message,
   MessageDeliveredEventData,
   MessageReadEventData,
   MessageSentEventData,
   ParticipantBlockedEventData,
 } from '../../services/api/types/message-types';
-import chatAudioService from '../../services/audio/chat-audio-service';
+import chatAudioService, {
+  type RecordedChatAudio,
+} from '../../services/audio/chat-audio-service';
+import {
+  type CachedAudioUrl,
+  isAudioUrlFresh,
+  toCachedAudioUrl,
+} from './audioUrlCache';
+import { chatErrorMessageKey } from './chat-error-messages';
 import type { AudioBubblePlayback } from './components/AudioMessageBubble';
 import IcebreakerChips from './components/IcebreakerChips';
 import MatchIntroCard from './components/MatchIntroCard';
@@ -46,9 +59,29 @@ import MessageBubble from './components/MessageBubble';
 import NotificationPermissionBanner from './components/notification-permission-banner';
 import TypingIndicator from './components/TypingIndicator';
 import VoiceRecorderBar from './components/VoiceRecorderBar';
+import {
+  type ChatResolutionServices,
+  useChatResolution,
+} from './hooks/useChatResolution';
 import { useSendMessage } from './hooks/useSendMessage';
+import { mergeNewestPage } from './mergeMessages';
+import {
+  addServerMessage,
+  type ChatMessage,
+  sortMessages,
+} from './optimisticMessages';
+import { applyReadUpTo } from './readReceipts';
+import { canReportMessage, REPORT_REASONS } from './reportMessage';
+import {
+  getMyParticipant,
+  getOtherParticipant,
+  getSendTarget,
+  threadSyncKey,
+} from './SingleChat.routing';
 import Styles from './SingleChat.styles';
+import { getLastSeenMessageIndex } from './SingleChat.utils';
 import SingleChatHeader from './SingleChatHeader';
+import { isWaitingForReply } from './waitForReply';
 
 type ChatAudioPlaybackState = {
   messageId: number | null;
@@ -58,6 +91,12 @@ type ChatAudioPlaybackState = {
 };
 
 const MESSAGES_PAGE_SIZE = 50;
+
+/** A voice note stops by itself at this length and waits for Send / Cancel. */
+const MAX_VOICE_SECONDS = 60;
+
+/** While Pusher is not connected, poll the open thread this often. */
+const OFFLINE_POLL_INTERVAL_MS = 15000;
 
 const isRateLimitError = (error: unknown): boolean => {
   if (typeof error === 'string') {
@@ -72,29 +111,89 @@ const isRateLimitError = (error: unknown): boolean => {
   return false;
 };
 
+const chatResolutionServices: ChatResolutionServices = {
+  getConversation: (conversationId) =>
+    messageServices.getConversation(conversationId),
+  getConversationWithUser: (userId) =>
+    messageServices.getConversationWithUser(userId),
+  getUserDetail: (userId) => ApiServices.getUserDetail(userId),
+};
+
 const SingleChat = (props: any) => {
   const Rtl = CheckRtl();
   const flatListRef: any = useRef(null);
   const inputRef: any = useRef(null);
   const { t }: any = useTranslation();
-  const { currentUser } = useGlobalContext();
-  const fromNotification =
-    props?.route?.params?.from === 'notification' ? true : false;
-  const fromMessages = props?.route?.params?.from === 'messages' ? true : false;
-  const guardian = currentUser?.guardian ? currentUser?.guardian : false;
-  const [otherUserData, setOtherUserData] = useState(
-    props?.route?.params?.otherUserData
+  const { currentUser, updateOpenedConversationId } = useGlobalContext();
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Track messages to avoid race conditions between fetchMessages and Pusher events
+  const messagesRef = useRef<ChatMessage[]>([]);
+  // True when this screen created the conversation with `start` in this
+  // session (drives the client-side "wait for a reply" pre-check, which is
+  // only certain for a brand-new chat; see waitForReply.ts).
+  const [createdHere, setCreatedHere] = useState(false);
+  // The server rejected a send with WAIT_FOR_REPLY; cleared as soon as a reply
+  // is on screen (see isWaitingForReply) or the chat changes.
+  const [serverSaysWait, setServerSaysWait] = useState(false);
+  // Resets everything that belongs to one chat when a push / banner re-targets
+  // this screen at another chat (assigned below, once its pieces exist).
+  const resetForNewEntryRef = useRef<() => void>(() => {});
+  const {
+    entryKey,
+    entryGeneration,
+    otherUserData,
+    conversationData,
+    setConversationData,
+    conversationId,
+    setConversationId,
+    isBlockedByYou,
+    setIsBlockedByYou,
+    isBlockedYou,
+    setIsBlockedYou,
+    loader,
+    setLoader,
+    resolved,
+    loadError,
+    setLoadError,
+    isPartnerDeleted,
+    retryResolution,
+  } = useChatResolution({
+    routeParams: props?.route?.params,
+    currentUserId: currentUser?.id,
+    services: chatResolutionServices,
+    onEntryChange: () => resetForNewEntryRef.current(),
+  });
+  // Tell the foreground push banner which chat is on screen so a message for
+  // it doesn't pop a banner over the thread being read. Cleared on blur,
+  // unmount and when the screen is re-targeted at another conversation.
+  // The same effect records whether the thread is on screen: a message that
+  // arrives while the member is elsewhere must not be reported as read.
+  const isScreenFocusedRef = useRef(false);
+  useFocusEffect(
+    useCallback(() => {
+      isScreenFocusedRef.current = true;
+      if (!conversationId) {
+        return () => {
+          isScreenFocusedRef.current = false;
+        };
+      }
+      updateOpenedConversationId?.(conversationId);
+      return () => {
+        isScreenFocusedRef.current = false;
+        updateOpenedConversationId?.(null);
+      };
+    }, [conversationId, updateOpenedConversationId])
   );
-  const [isBlockedByYou, _setIsBlockedByYou] = useState(false);
-  const [isBlockedYou, setIsBlockedYou] = useState(false);
+  // The conversation id (and entry) currently shown, so a slow fetch for a
+  // previous one can be discarded.
+  const activeConversationIdRef = useRef(conversationId);
+  useEffect(() => {
+    activeConversationIdRef.current = conversationId;
+  }, [conversationId]);
   const [isUnblocking, setIsUnblocking] = useState(false);
-  const [loader, setLoader] = useState(true);
   const [messagePressedId, setMessagePressedId] = useState<number | null>(null);
   const [quote, setQuote] = useState('');
 
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [conversationData, setConversationData] = useState<any>({});
-  const [conversationId, setConversationId] = useState('');
   const [audioPlayback, setAudioPlayback] = useState<ChatAudioPlaybackState>({
     messageId: null,
     status: 'idle',
@@ -106,18 +205,14 @@ const SingleChat = (props: any) => {
   const [isOtherUserTyping, setIsOtherUserTyping] = useState(false);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unsubscribeConversationRef = useRef<(() => void) | null>(null);
+  // Bumped on every (re)subscribe and on teardown; see setupPusherListeners.
+  const subscribeGenerationRef = useRef(0);
   const lastTypingEventRef = useRef<number>(0);
-  // Track which messages have been marked as read to avoid duplicate API calls
+  // Messages already reported as read (or being reported), so no id is sent
+  // twice. mark-all-read fires only when an id NOT in this set shows up, so a
+  // stream of incoming messages never re-triggers a whole-conversation call.
+  // The server also stamps delivered_at on everything it marks read.
   const markedAsReadRef = useRef<Set<number>>(new Set());
-  // Track which messages have been marked as delivered to avoid duplicate API calls
-  const markedAsDeliveredRef = useRef<Set<number>>(new Set());
-  // Track messages to avoid race conditions between fetchMessages and Pusher events
-  const messagesRef = useRef<Message[]>([]);
-  // Bulk mark-all-read should fire once per focus session, not on every
-  // messages-array change — otherwise every single incoming message while
-  // the screen stays focused re-triggers a "mark whole conversation read"
-  // round-trip (this was already tripping the 429 handling below).
-  const hasMarkedAllOnFocusRef = useRef<boolean>(false);
   const isFetchingMessagesRef = useRef<boolean>(false);
   // Older-message pagination: history was previously capped at whatever the
   // first fetch returned (50 messages) with no way to load anything before that.
@@ -126,11 +221,19 @@ const SingleChat = (props: any) => {
   const hasMoreMessagesRef = useRef<boolean>(true);
   const currentPageRef = useRef<number>(1);
   const audioPlaybackRef = useRef<ChatAudioPlaybackState>(audioPlayback);
-  const audioSourceCacheRef = useRef<Map<number, string>>(new Map());
+  const audioSourceCacheRef = useRef<Map<number, CachedAudioUrl>>(new Map());
 
   const [inputMessage, setInputMessage] = useState('');
-  const onChangeInputMessage = (text: string) => {
+  // Mirrors the composer text synchronously so a double tap on send cannot
+  // submit the same text twice before the cleared state re-renders.
+  const inputMessageRef = useRef('');
+  const lastSendAtRef = useRef(0);
+  const setInputText = (text: string) => {
+    inputMessageRef.current = text;
     setInputMessage(text);
+  };
+  const onChangeInputMessage = (text: string) => {
+    setInputText(text);
 
     // Throttle: at most one client-typing event every 2s, and only while
     // there's an existing conversation to broadcast on.
@@ -151,75 +254,27 @@ const SingleChat = (props: any) => {
   const [voiceElapsedSeconds, setVoiceElapsedSeconds] = useState(0);
   const [voiceWaveformPeaks, setVoiceWaveformPeaks] = useState<number[]>([]);
   const [isSendingVoice, setIsSendingVoice] = useState(false);
+  // Synchronous mirror of isSendingVoice: a same-frame double tap (or the
+  // length cap firing during a send) must see it before the re-render.
+  const isSendingVoiceRef = useRef(false);
   const voiceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Drops a recording in progress (assigned below). Used when the screen
+  // loses focus, the app goes to the background or the screen unmounts.
+  const abortVoiceRecordingRef = useRef<() => Promise<void>>(async () => {});
+  // At the length cap the recorder is stopped and the finished note is HELD
+  // here until the member taps Send (or Cancel / leaves, which drops it).
+  const heldRecordingRef = useRef<RecordedChatAudio | null>(null);
+  const holdPromiseRef = useRef<Promise<void> | null>(null);
+  // Bumped whenever a recording starts or is dropped, so a stop that finishes
+  // late never resurrects a cancelled note.
+  const voiceSessionRef = useRef(0);
 
-  // Clear the voice-recording interval if the screen unmounts mid-recording.
+  // A recording must not outlive the screen: stop the timer and the recorder.
   useEffect(() => {
     return () => {
-      if (voiceTimerRef.current) {
-        clearInterval(voiceTimerRef.current);
-        voiceTimerRef.current = null;
-      }
+      void abortVoiceRecordingRef.current();
     };
   }, []);
-
-  const getOtherUserData = async () => {
-    ApiServices.getUserDetail(otherUserData?.id).then((res: any) => {
-      setOtherUserData((prev: any) => ({
-        ...prev,
-        ...res,
-      }));
-    });
-  };
-
-  useEffect(() => {
-    if ((fromMessages || fromNotification) && otherUserData?.type === 'User') {
-      getOtherUserData();
-    } else if (fromMessages) {
-      setLoader(false);
-    } else if (fromNotification) {
-      setLoader(false);
-    }
-  }, [fromMessages, fromNotification, otherUserData?.type]);
-
-  useEffect(() => {
-    const routeConversationData = props?.route?.params?.conversationData;
-    if (routeConversationData) {
-      // New API structure (Conversation type)
-      if (routeConversationData.id) {
-        setConversationData(routeConversationData);
-        setConversationId(routeConversationData.id.toString());
-
-        // Check blocked status from participants.
-        //
-        // The pivot `is_blocked` flag lives on the row of the participant who
-        // is blocked (i.e. cannot send). So:
-        //   - my own row blocked   => the other user blocked me  => isBlockedYou
-        //   - the other's row blocked => I blocked the other user => isBlockedByYou
-        // The previous code read the other participant's flag into isBlockedYou
-        // (inverted) and never initialised isBlockedByYou from the server.
-        const currentUserId = currentUser?.id;
-        const myParticipant = routeConversationData.participants.find(
-          (p: any) => p.id === currentUserId
-        );
-        const otherParticipant = routeConversationData.participants.find(
-          (p: any) => p.id !== currentUserId
-        );
-        setIsBlockedYou(!!myParticipant?.is_blocked);
-        _setIsBlockedByYou(!!otherParticipant?.is_blocked);
-
-        // Keep loader true - it will be set to false after messages are fetched
-        // Don't set loader to false here, wait for fetchMessages to complete
-      }
-    } else if (!fromNotification) {
-      setLoader(false);
-    }
-  }, [
-    props?.route?.params?.conversationData,
-    currentUser,
-    otherUserData,
-    fromNotification,
-  ]);
 
   const fetchMessages = useCallback(async () => {
     if (!conversationId) return;
@@ -230,8 +285,10 @@ const SingleChat = (props: any) => {
       return;
     }
 
-    // Set loader to true when starting to fetch messages
-    setLoader(true);
+    // Spinner only for an empty thread: after the first message of a new chat
+    // gives it an id, the bubble must not flash away behind a loader.
+    if (messagesRef.current.length === 0) setLoader(true);
+    setLoadError(null);
     isFetchingMessagesRef.current = true;
 
     try {
@@ -246,62 +303,35 @@ const SingleChat = (props: any) => {
         conversationIdNum,
         { per_page: MESSAGES_PAGE_SIZE, page: 1 }
       );
+      // The screen moved to another conversation while this was in flight.
+      if (activeConversationIdRef.current !== conversationId) return;
       currentPageRef.current = 1;
       hasMoreMessagesRef.current = fetchedMessages.length >= MESSAGES_PAGE_SIZE;
 
-      // Merge fetched messages with existing messages to avoid losing Pusher messages
-      // Get current messages from ref to avoid stale closure
-      const currentMessages = messagesRef.current;
-
-      // Create a map of existing messages by ID for quick lookup
-      const existingMessagesMap = new Map(
-        currentMessages.map((msg) => [msg.id, msg])
-      );
-
-      // Add fetched messages, keeping existing ones if they're newer or have updates
-      fetchedMessages.forEach((fetchedMsg) => {
-        const existingMsg = existingMessagesMap.get(fetchedMsg.id);
-        if (!existingMsg) {
-          // New message from API, add it
-          existingMessagesMap.set(fetchedMsg.id, fetchedMsg);
-        } else {
-          // Message exists, keep the one with more complete data (prefer existing if it has statuses)
-          if (existingMsg.statuses && existingMsg.statuses.length > 0) {
-            // Keep existing message but update other fields if needed
-            existingMessagesMap.set(fetchedMsg.id, {
-              ...fetchedMsg,
-              statuses: existingMsg.statuses,
-            });
-          } else {
-            // Use fetched message if it has better data
-            existingMessagesMap.set(fetchedMsg.id, fetchedMsg);
-          }
-        }
+      // Merge into the CURRENT list (functional update) so Pusher messages and
+      // unsent bubbles added meanwhile are not lost.
+      setMessages((previous) => {
+        const merged = mergeNewestPage(previous, fetchedMessages);
+        messagesRef.current = merged;
+        return merged;
       });
-
-      // Convert map back to array and sort by created_at (newest first)
-      const mergedMessages = Array.from(existingMessagesMap.values());
-      const sortedMessages = mergedMessages.sort((a, b) => {
-        const timeA = new Date(a.created_at).getTime();
-        const timeB = new Date(b.created_at).getTime();
-        return timeB - timeA; // Descending order (newest first)
-      });
-
-      setMessages(sortedMessages);
-      messagesRef.current = sortedMessages;
       setLoader(false);
       isFetchingMessagesRef.current = false;
 
-      // Reset the marked as read/delivered tracking when messages are fetched
-      // This ensures we can mark messages as read/delivered when screen is focused
+      // Reset the read tracking when messages are fetched so unread ones are
+      // reported again when the screen is focused.
       markedAsReadRef.current.clear();
-      markedAsDeliveredRef.current.clear();
     } catch (error: unknown) {
       console.error('[SingleChat.fetchMessages] Error:', error);
+      if (activeConversationIdRef.current !== conversationId) return;
+      // Don't present a failed load as an empty chat.
+      if (messagesRef.current.length === 0) {
+        setLoadError('messages');
+      }
       setLoader(false);
       isFetchingMessagesRef.current = false;
     }
-  }, [conversationId]);
+  }, [conversationId, setLoadError, setLoader]);
 
   // Loads the next older page of history. The API doesn't return a total
   // count, so "more pages exist" is inferred from getting a full page back.
@@ -324,27 +354,28 @@ const SingleChat = (props: any) => {
         conversationIdNum,
         { per_page: MESSAGES_PAGE_SIZE, page: nextPage }
       );
+      // The screen moved to another conversation while this was in flight.
+      if (activeConversationIdRef.current !== conversationId) return;
 
       currentPageRef.current = nextPage;
       hasMoreMessagesRef.current = olderMessages.length >= MESSAGES_PAGE_SIZE;
 
       if (olderMessages.length === 0) return;
 
-      const currentMessages = messagesRef.current;
-      const existingIds = new Set(currentMessages.map((msg) => msg.id));
-      const newOlderMessages = olderMessages.filter(
-        (msg) => !existingIds.has(msg.id)
-      );
-      if (newOlderMessages.length === 0) return;
+      // Functional update: unsent bubbles and realtime messages added while
+      // the page was loading must not be overwritten.
+      setMessages((currentMessages) => {
+        const existingIds = new Set(currentMessages.map((msg) => msg.id));
+        const newOlderMessages = olderMessages.filter(
+          (msg) => !existingIds.has(msg.id)
+        );
+        if (newOlderMessages.length === 0) return currentMessages;
 
-      // Older messages sort to the end of the (newest-first) array.
-      const merged = [...currentMessages, ...newOlderMessages].sort(
-        (a, b) =>
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
-
-      setMessages(merged);
-      messagesRef.current = merged;
+        // Older messages sort to the end of the (newest-first) array.
+        const merged = sortMessages([...currentMessages, ...newOlderMessages]);
+        messagesRef.current = merged;
+        return merged;
+      });
     } catch (error: unknown) {
       console.error('[SingleChat.loadOlderMessages] Error:', error);
     } finally {
@@ -352,6 +383,59 @@ const SingleChat = (props: any) => {
       setIsLoadingMoreMessages(false);
     }
   }, [conversationId]);
+
+  // Catch-up: fetches the newest page and merges it into what is on screen,
+  // without touching the loader. Used after the app returns to the foreground,
+  // after Pusher reconnects, as an offline poll, and when a pushed message body
+  // was truncated. Safe to call any time; overlapping calls collapse.
+  const isCatchingUpRef = useRef<boolean>(false);
+  // A truncated MessageSent that arrived mid catch-up: that fetch may predate
+  // the message, so run exactly one more when it ends.
+  const catchUpQueuedRef = useRef<boolean>(false);
+  const refreshNewestMessages = useCallback(
+    async (options?: { queueIfBusy?: boolean }) => {
+      if (!conversationId) return;
+      const conversationIdNum = parseInt(conversationId, 10);
+      if (isNaN(conversationIdNum)) return;
+      if (isCatchingUpRef.current) {
+        if (options?.queueIfBusy) catchUpQueuedRef.current = true;
+        return;
+      }
+      // The initial load (or a retry) is already fetching the same page.
+      if (isFetchingMessagesRef.current) return;
+
+      isCatchingUpRef.current = true;
+      try {
+        const fetched = await messageServices.getConversationMessages(
+          conversationIdNum,
+          { per_page: MESSAGES_PAGE_SIZE, page: 1 }
+        );
+        // The screen moved to another conversation while this was in flight.
+        if (activeConversationIdRef.current !== conversationId) return;
+        setMessages((previous) => {
+          const merged = mergeNewestPage(previous, fetched);
+          messagesRef.current = merged;
+          return merged;
+        });
+        // The thread loaded after all: drop the "couldn't load" state.
+        setLoadError((previous) => (previous === 'messages' ? null : previous));
+      } catch (error: unknown) {
+        // Best-effort: the next trigger tries again.
+        console.error('[SingleChat.refreshNewestMessages] Error:', error);
+      } finally {
+        isCatchingUpRef.current = false;
+        if (catchUpQueuedRef.current) {
+          catchUpQueuedRef.current = false;
+          void refreshNewestMessagesRef.current();
+        }
+      }
+    },
+    [conversationId, setLoadError]
+  );
+  const refreshNewestMessagesRef = useRef(refreshNewestMessages);
+  useEffect(() => {
+    refreshNewestMessagesRef.current = refreshNewestMessages;
+  }, [refreshNewestMessages]);
 
   // Store handler refs (will be initialized after handlers are defined)
   const handleNewMessageRef = useRef<
@@ -369,10 +453,13 @@ const SingleChat = (props: any) => {
 
   // Setup Pusher real-time listeners for this conversation
   const setupPusherListeners = useCallback(async () => {
-    if (!conversationId || !pusherService.isReady()) {
-      console.log('[SingleChat] Pusher not ready or no conversation ID');
+    if (!conversationId) {
+      console.log('[SingleChat] No conversation ID');
       return;
     }
+    // Invalidates a still-pending subscribe from an earlier call / screen
+    // state, so it unsubscribes itself instead of leaking.
+    const generation = (subscribeGenerationRef.current += 1);
 
     // M6 fix: if a previous subscription is still active (e.g. the screen
     // re-mounted with the same conversationId or the effect re-ran), unsubscribe
@@ -399,9 +486,14 @@ const SingleChat = (props: any) => {
       // Subscribe to conversation channel: conversation.{conversation-id}
       const channelName = `private-conversation.${conversationId}`;
 
+      // Requested even before Pusher is connected: pusherService fulfils it
+      // on connect / reconnect.
       const unsubscribe = await pusherService.subscribeToChannel(
         channelName,
         (event) => {
+          // A late event from the channel of a chat this screen has left
+          // (re-targeted) must not land in the one now on screen.
+          if (activeConversationIdRef.current !== conversationId) return;
           console.log('[SingleChat] Pusher event received:', event.eventName);
 
           try {
@@ -441,6 +533,11 @@ const SingleChat = (props: any) => {
                   handleNewMessageRef.current(
                     messageData as MessageSentEventData['message']
                   );
+                }
+                // The server shortened the body to fit Pusher's size limit;
+                // the list endpoint has the full text.
+                if (messageData.truncated === true) {
+                  void refreshNewestMessagesRef.current({ queueIfBusy: true });
                 }
                 break;
               }
@@ -504,58 +601,30 @@ const SingleChat = (props: any) => {
         }
       );
 
+      if (generation !== subscribeGenerationRef.current) {
+        unsubscribe();
+        return;
+      }
       unsubscribeConversationRef.current = unsubscribe;
       console.log('[SingleChat] ✅ Subscribed to conversation channel');
-
-      // Mark all messages as read after subscription if there are unread messages
-      const currentUserId = currentUser?.id;
-      const currentUserIdStr =
-        currentUserId != null ? String(currentUserId) : null;
-
-      if (currentUserIdStr && conversationData?.participants) {
-        const currentUserParticipant = conversationData.participants.find(
-          (p: any) => String(p.id) === currentUserIdStr
-        );
-        // Focus handling batches existing unread messages; avoid a second
-        // mark-all-read request during subscription setup.
-        const unReadCount = Math.min(
-          0,
-          currentUserParticipant?.unread_count || 0
-        );
-
-        if (unReadCount > 0) {
-          console.log(
-            '[SingleChat] Marking all messages as read for conversation:',
-            conversationId,
-            'unread_count:',
-            unReadCount
-          );
-          messageServices
-            .markAllMessagesAsRead(parseInt(conversationId, 10))
-            .then(() => {
-              console.log(
-                '[SingleChat] ✅ All messages marked as read for conversation:',
-                conversationId
-              );
-            })
-            .catch((error) => {
-              console.error(
-                '[SingleChat] Error marking all messages as read:',
-                error
-              );
-            });
-        }
-      }
     } catch (error) {
       console.error('[SingleChat] Error setting up Pusher:', error);
     }
-  }, [conversationId, conversationData, currentUser]);
+  }, [conversationId]);
 
   // Handle new message from Pusher
   // Note: messageData is the nested message object from MessageSentEventData
   const handleNewMessage = useCallback(
     (messageData: MessageSentEventData['message']) => {
       const currentUserId = currentUser?.id;
+
+      // Only messages of the conversation on screen.
+      if (
+        messageData.conversation_id != null &&
+        String(messageData.conversation_id) !== activeConversationIdRef.current
+      ) {
+        return;
+      }
 
       // Don't add message if it's from current user (already added optimistically)
       if (messageData.sender_id === currentUserId) {
@@ -564,7 +633,7 @@ const SingleChat = (props: any) => {
       }
 
       // Transform event data to Message type
-      const message: Message = {
+      const message: ChatMessage = {
         id: messageData.id,
         conversation_id: messageData.conversation_id,
         body: messageData.body,
@@ -576,79 +645,35 @@ const SingleChat = (props: any) => {
         audio: messageData.audio || null,
       };
 
-      // Add new message to list
+      // Add new message to list (deduped by id)
       setMessages((prevMessages) => {
-        // Check if message already exists
-        const exists = prevMessages.some((msg) => msg.id === message.id);
-        if (exists) {
+        const next = addServerMessage(prevMessages, message);
+        if (next === prevMessages) {
           console.log('[SingleChat] Message already exists, skipping');
-          return prevMessages;
         }
-
-        // Always add the message, even if we're fetching
-        // The fetchMessages function will merge and deduplicate
-        const newMessages = [message, ...prevMessages];
-        const sortedMessages = newMessages.sort((a, b) => {
-          const timeA = new Date(a.created_at).getTime();
-          const timeB = new Date(b.created_at).getTime();
-          return timeB - timeA;
-        });
-
         // Update ref to keep it in sync
-        messagesRef.current = sortedMessages;
-        return sortedMessages;
+        messagesRef.current = next;
+        return next;
       });
 
-      // Mark this specific message as read immediately since user is viewing the chat
-      // When User B receives a message from User A while viewing the chat, mark it as read instantly
-      if (message.id && !markedAsReadRef.current.has(message.id)) {
-        // Add to tracking set immediately to prevent duplicate calls
+      // The member is looking at this thread: report the message as read with
+      // one single-message call. Off screen or in the background it is left
+      // unread, and the focus / foreground handling picks it up later.
+      if (
+        message.id > 0 &&
+        isScreenFocusedRef.current &&
+        AppState.currentState === 'active' &&
+        !markedAsReadRef.current.has(message.id)
+      ) {
         markedAsReadRef.current.add(message.id);
 
-        // Call API to mark message as read
-        messageServices
-          .markMessageAsRead(message.id)
-          .then(() => {
-            console.log(
-              '[SingleChat] ✅ Message marked as read (received while viewing):',
-              message.id
-            );
-          })
-          .catch((error) => {
-            console.error(
-              '[SingleChat] ❌ Error marking message as read:',
-              error
-            );
-            if (!isRateLimitError(error)) {
-              // Remove from set on non-throttle errors so we can retry later.
-              markedAsReadRef.current.delete(message.id);
-            }
-          });
-      }
-
-      // Mark message as delivered
-      if (message.id && !markedAsDeliveredRef.current.has(message.id)) {
-        // Add to tracking set immediately to prevent duplicate calls
-        markedAsDeliveredRef.current.add(message.id);
-
-        messageServices
-          .markMessageDelivered(message.id)
-          .then(() => {
-            console.log(
-              '[SingleChat] ✅ Message marked as delivered (received while viewing):',
-              message.id
-            );
-          })
-          .catch((error) => {
-            console.error(
-              '[SingleChat] ❌ Error marking message as delivered:',
-              error
-            );
-            if (!isRateLimitError(error)) {
-              // Remove from set on non-throttle errors so we can retry later.
-              markedAsDeliveredRef.current.delete(message.id);
-            }
-          });
+        messageServices.markMessageAsRead(message.id).catch((error) => {
+          console.error('[SingleChat] Error marking message as read:', error);
+          if (!isRateLimitError(error)) {
+            // Allow a later retry (not on throttle errors).
+            markedAsReadRef.current.delete(message.id);
+          }
+        });
       }
 
       // Clear typing indicator when message is received
@@ -657,56 +682,31 @@ const SingleChat = (props: any) => {
         clearTimeout(typingTimeoutRef.current);
       }
     },
-    [currentUser, conversationId]
+    [currentUser]
   );
 
-  // Handle message read status update
+  // Handle message read status update. The event names the highest message
+  // the reader has read, which covers every older message of this thread too.
   const handleMessageRead = useCallback((data: MessageReadEventData) => {
     console.log('[SingleChat] Updating message read status:', data);
 
     const readerId = data.read_by?.id;
-    const readAt = data.read_at || new Date().toISOString();
-
     if (!readerId) {
       console.error('[SingleChat] MessageRead event missing read_by.id');
       return;
     }
 
-    setMessages((prevMessages) =>
-      prevMessages.map((msg) => {
-        if (msg.id === data.message_id) {
-          // Find existing status for this reader or create new one
-          const existingStatusIndex = msg.statuses?.findIndex(
-            (status) => status.participant_id === readerId
-          );
-
-          const updatedStatuses =
-            existingStatusIndex !== undefined && existingStatusIndex >= 0
-              ? // Update existing status
-                msg.statuses?.map((status, index) =>
-                  index === existingStatusIndex
-                    ? { ...status, read_at: readAt }
-                    : status
-                ) || []
-              : // Create new status entry for this reader
-                [
-                  ...(msg.statuses || []),
-                  {
-                    participant_type: data.read_by?.type || 'User',
-                    participant_id: readerId,
-                    delivered_at: null,
-                    read_at: readAt,
-                  },
-                ];
-
-          return {
-            ...msg,
-            statuses: updatedStatuses,
-          };
-        }
-        return msg;
-      })
-    );
+    const readAt = data.read_at || new Date().toISOString();
+    setMessages((prevMessages) => {
+      const next = applyReadUpTo(prevMessages, {
+        messageId: data.message_id,
+        readerId,
+        readerType: data.read_by?.type,
+        readAt,
+      });
+      if (next !== prevMessages) messagesRef.current = next;
+      return next;
+    });
   }, []);
 
   // Handle message delivered status update
@@ -783,7 +783,7 @@ const SingleChat = (props: any) => {
         }
       } else if (data.blocked_by_id === currentUserId) {
         // Fallback if the actor ever receives the event (self-view sync).
-        _setIsBlockedByYou(data.is_blocked);
+        setIsBlockedByYou(data.is_blocked);
       }
     },
     [currentUser]
@@ -892,40 +892,26 @@ const SingleChat = (props: any) => {
     }
   }, []);
 
-  const getPreparedAudioSource = useCallback(async (message: any) => {
-    if (message.local_uri) return message.local_uri;
+  // Playback source for a voice note. A cached URL is reused only while it
+  // has not (nearly) expired; `refresh` skips the cache and a local recording
+  // (used to recover from a playback error).
+  const getPreparedAudioSource = useCallback(
+    async (message: any, refresh = false): Promise<string> => {
+      if (message.local_uri && !refresh) return message.local_uri;
 
-    const cachedSource = audioSourceCacheRef.current.get(message.id);
-    if (cachedSource) return cachedSource;
+      const cached = audioSourceCacheRef.current.get(message.id);
+      if (!refresh && isAudioUrlFresh(cached)) return cached.url;
 
-    const sourceUrl = (await messageServices.getMessageAudioUrl(message.id))
-      .url;
-    audioSourceCacheRef.current.set(message.id, sourceUrl);
-    return sourceUrl;
-  }, []);
-
-  const prepareAudioMessageSource = useCallback(
-    async (message: any): Promise<void> => {
-      if (!message?.id) return;
-
-      const fallbackDurationMillis = getAudioDurationMillis(message);
-      setAudioPlayback({
-        messageId: message.id,
-        status: 'loading',
-        positionMillis: 0,
-        durationMillis: fallbackDurationMillis,
-      });
-
-      try {
-        await getPreparedAudioSource(message);
-      } catch (error) {
-        console.error('[SingleChat] Error preparing audio:', error);
-        flashErrorMessage('Unable to load this voice message.');
-      } finally {
-        resetAudioPlayback();
-      }
+      const { url, expires_at } = await messageServices.getMessageAudioUrl(
+        message.id
+      );
+      audioSourceCacheRef.current.set(
+        message.id,
+        toCachedAudioUrl(url, expires_at)
+      );
+      return url;
     },
-    [getAudioDurationMillis, getPreparedAudioSource, resetAudioPlayback]
+    []
   );
 
   const playAudioMessage = useCallback(
@@ -949,8 +935,8 @@ const SingleChat = (props: any) => {
         durationMillis: fallbackDurationMillis,
       });
 
-      try {
-        const sourceUrl = await getPreparedAudioSource(message);
+      const startPlayback = async (refresh: boolean) => {
+        const sourceUrl = await getPreparedAudioSource(message, refresh);
 
         await chatAudioService.play(sourceUrl, {
           onProgress: ({ currentPosition, duration }) => {
@@ -974,6 +960,20 @@ const SingleChat = (props: any) => {
             resetAudioPlayback();
           },
         });
+      };
+
+      try {
+        try {
+          await startPlayback(false);
+        } catch (firstError) {
+          // The signed URL may have expired (or the local file is gone): ask
+          // the server for a fresh one and try once more.
+          console.warn(
+            '[SingleChat] Playback failed, refetching URL:',
+            firstError
+          );
+          await startPlayback(true);
+        }
 
         setAudioPlayback((previous) =>
           previous.messageId === message.id
@@ -998,6 +998,8 @@ const SingleChat = (props: any) => {
     (message: any) => {
       const currentPlayback = audioPlaybackRef.current;
       if (currentPlayback.messageId === message?.id) {
+        // The first tap is still fetching the URL / starting the player.
+        if (currentPlayback.status === 'loading') return;
         if (currentPlayback.status === 'playing') {
           void pauseAudioPlayback();
           return;
@@ -1008,22 +1010,10 @@ const SingleChat = (props: any) => {
         }
       }
 
-      if (
-        !message?.local_uri &&
-        !audioSourceCacheRef.current.has(message?.id)
-      ) {
-        void prepareAudioMessageSource(message);
-        return;
-      }
-
+      // One tap fetches the URL (when needed) and plays.
       void playAudioMessage(message);
     },
-    [
-      pauseAudioPlayback,
-      playAudioMessage,
-      prepareAudioMessageSource,
-      resumeAudioPlayback,
-    ]
+    [pauseAudioPlayback, playAudioMessage, resumeAudioPlayback]
   );
 
   useEffect(() => {
@@ -1032,6 +1022,11 @@ const SingleChat = (props: any) => {
       (nextState: AppStateStatus) => {
         if (nextState !== 'active') {
           void pauseAudioPlayback();
+        }
+        // 'background' only: iOS reports 'inactive' while the microphone
+        // permission prompt is up, which must not cancel the recording.
+        if (nextState === 'background') {
+          void abortVoiceRecordingRef.current();
         }
       }
     );
@@ -1047,19 +1042,23 @@ const SingleChat = (props: any) => {
     };
   }, []);
 
-  // Initial fetch and setup Pusher
-  // Only run when conversationId changes, not when callbacks are recreated
+  // Initial fetch and setup Pusher. Runs when the thread identity changes (the
+  // conversation id OR the route entry), not when callbacks are recreated: a
+  // push for the chat already open by user id (`u:5` -> `c:10`) clears the
+  // messages while the id stays the same, and must still refetch.
+  const threadKey = threadSyncKey(conversationId, entryGeneration);
   useEffect(() => {
-    if (conversationId) {
-      // Reset messages ref and pagination cursor when conversation changes
-      messagesRef.current = [];
+    if (threadKey) {
+      // Reset the pagination cursor for the new thread. messagesRef is left
+      // alone: it mirrors what is on screen (a re-target already cleared it).
       currentPageRef.current = 1;
       hasMoreMessagesRef.current = true;
       fetchMessages();
       setupPusherListeners();
 
       return () => {
-        // Cleanup Pusher subscription
+        // Cleanup Pusher subscription (and cancel one still being created)
+        subscribeGenerationRef.current += 1;
         if (unsubscribeConversationRef.current) {
           unsubscribeConversationRef.current();
           unsubscribeConversationRef.current = null;
@@ -1072,142 +1071,136 @@ const SingleChat = (props: any) => {
         isFetchingMessagesRef.current = false;
       };
     }
-  }, [conversationId]);
+  }, [threadKey]);
 
-  // Mark all unread messages as read individually when screen is focused
+  // Catch up on messages that arrived while the phone was locked/offline:
+  // when the app returns to the foreground and when Pusher reconnects.
+  useEffect(() => {
+    const appStateSubscription = AppState.addEventListener(
+      'change',
+      (state: AppStateStatus) => {
+        if (state === 'active') void refreshNewestMessagesRef.current();
+      }
+    );
+    const removeConnectionListener = pusherService.addConnectionListener(
+      (currentState, previousState) => {
+        if (currentState === 'CONNECTED' && previousState !== 'CONNECTED') {
+          void refreshNewestMessagesRef.current();
+        }
+      }
+    );
+    return () => {
+      appStateSubscription.remove();
+      removeConnectionListener();
+    };
+  }, []);
+
+  // While this chat is focused and Pusher is not connected, poll the newest
+  // page so the thread still updates.
   useFocusEffect(
     useCallback(() => {
-      if (!conversationId || messages.length === 0) return;
-
-      const currentUserId = currentUser?.id;
-
-      if (!currentUserId) return;
-
-      const unreadMessages = messages.filter((message) => {
-        if (message.sender_id === currentUserId || !message.id) return false;
-        if (markedAsReadRef.current.has(message.id)) return false;
-
-        return !message.statuses?.some(
-          (status) =>
-            status.participant_id === currentUserId && status.read_at !== null
-        );
-      });
-
-      if (unreadMessages.length > 0 && !hasMarkedAllOnFocusRef.current) {
-        hasMarkedAllOnFocusRef.current = true;
-        unreadMessages.forEach((message) =>
-          markedAsReadRef.current.add(message.id)
-        );
-
-        messageServices
-          .markAllMessagesAsRead(parseInt(conversationId, 10))
-          .then(() => {
-            console.log(
-              '[SingleChat] Marked unread messages as read on focus:',
-              unreadMessages.length
-            );
-          })
-          .catch((error) => {
-            console.error(
-              '[SingleChat] Error marking all messages as read on focus:',
-              error
-            );
-
-            if (!isRateLimitError(error)) {
-              unreadMessages.forEach((message) =>
-                markedAsReadRef.current.delete(message.id)
-              );
-              hasMarkedAllOnFocusRef.current = false;
-            }
-          });
-      }
-
-      // Mark each unread message from other users as read and delivered individually
-      messages.forEach((message) => {
-        // Only mark messages from other users
-        if (message.sender_id !== currentUserId && message.id) {
-          // Mark as read if not already read
-          if (!markedAsReadRef.current.has(message.id)) {
-            // Check if message is already read by checking statuses
-            const isAlreadyRead = message.statuses?.some(
-              (status) =>
-                status.participant_id === currentUserId &&
-                status.read_at !== null
-            );
-
-            if (!isAlreadyRead) {
-              markedAsReadRef.current.add(message.id);
-              messageServices
-                .markMessageAsRead(message.id)
-                .then(() => {
-                  console.log(
-                    '[SingleChat] ✅ Marked message as read on focus:',
-                    message.id
-                  );
-                })
-                .catch((error) => {
-                  console.error(
-                    '[SingleChat] Error marking message as read on focus:',
-                    error
-                  );
-                  if (!isRateLimitError(error)) {
-                    // Remove from set on non-throttle errors so we can retry later.
-                    markedAsReadRef.current.delete(message.id);
-                  }
-                });
-            } else {
-              // Mark as processed even if already read to avoid duplicate checks
-              markedAsReadRef.current.add(message.id);
-            }
-          }
-
-          // Mark as delivered if not already delivered
-          if (!markedAsDeliveredRef.current.has(message.id)) {
-            // Check if message is already delivered by checking statuses
-            const isAlreadyDelivered = message.statuses?.some(
-              (status) =>
-                status.participant_id === currentUserId &&
-                status.delivered_at !== null
-            );
-
-            if (!isAlreadyDelivered) {
-              markedAsDeliveredRef.current.add(message.id);
-              messageServices
-                .markMessageDelivered(message.id)
-                .then(() => {
-                  console.log(
-                    '[SingleChat] ✅ Marked message as delivered on focus:',
-                    message.id
-                  );
-                })
-                .catch((error) => {
-                  console.error(
-                    '[SingleChat] Error marking message as delivered on focus:',
-                    error
-                  );
-                  if (!isRateLimitError(error)) {
-                    // Remove from set on non-throttle errors so we can retry later.
-                    markedAsDeliveredRef.current.delete(message.id);
-                  }
-                });
-            } else {
-              // Mark as processed even if already delivered to avoid duplicate checks
-              markedAsDeliveredRef.current.add(message.id);
-            }
-          }
+      if (!conversationId) return undefined;
+      const timer = setInterval(() => {
+        if (
+          AppState.currentState === 'active' &&
+          pusherService.getConnectionState() !== 'CONNECTED'
+        ) {
+          void refreshNewestMessagesRef.current();
         }
-      });
-      // Note: intentionally no cleanup returned here — useFocusEffect
-      // re-invokes this callback (and would run any returned cleanup)
-      // every time `messages` changes while still focused, since the
-      // callback identity is part of its dependency array. Resetting the
-      // mark-all-read gate there would refire it on every new message,
-      // which is exactly the redundant behavior being fixed. The gate is
-      // reset on a real navigation 'blur' instead (see effect below).
-    }, [conversationId, messages, currentUser])
+      }, OFFLINE_POLL_INTERVAL_MS);
+      return () => clearInterval(timer);
+    }, [conversationId])
   );
 
-  const { onSendPress, isSending } = useSendMessage({
+  // Reports unread messages from the other side with ONE mark-all-read call
+  // (the server also stamps them delivered). Runs on focus, when the list
+  // gains a message that was not reported yet (e.g. a catch-up fetch) and when
+  // the app returns to the foreground; ids already reported are skipped, so
+  // each new message costs at most one call.
+  const markUnreadMessagesRead = useCallback(
+    (list: ChatMessage[]) => {
+      const currentUserId = currentUser?.id;
+      if (!conversationId || !currentUserId) return;
+      if (AppState.currentState !== 'active') return;
+
+      const unreadIds = list
+        .filter(
+          (message) =>
+            message.id > 0 &&
+            message.send_status === undefined &&
+            String(message.sender_id) !== String(currentUserId) &&
+            !markedAsReadRef.current.has(message.id) &&
+            !message.statuses?.some(
+              (status) =>
+                String(status.participant_id) === String(currentUserId) &&
+                status.read_at !== null
+            )
+        )
+        .map((message) => message.id);
+      if (unreadIds.length === 0) return;
+
+      unreadIds.forEach((id) => markedAsReadRef.current.add(id));
+
+      messageServices
+        .markAllMessagesAsRead(parseInt(conversationId, 10))
+        .catch((error) => {
+          console.error('[SingleChat] Error marking messages as read:', error);
+          if (!isRateLimitError(error)) {
+            unreadIds.forEach((id) => markedAsReadRef.current.delete(id));
+          }
+        });
+    },
+    [conversationId, currentUser?.id]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      markUnreadMessagesRead(messages);
+    }, [messages, markUnreadMessagesRead])
+  );
+
+  // Back from the background while the thread is open: report what arrived.
+  useEffect(() => {
+    const subscription = AppState.addEventListener(
+      'change',
+      (state: AppStateStatus) => {
+        if (state === 'active' && isScreenFocusedRef.current) {
+          markUnreadMessagesRead(messagesRef.current);
+        }
+      }
+    );
+    return () => subscription.remove();
+  }, [markUnreadMessagesRead]);
+
+  // The server refused a send because one side has blocked the other. Swap the
+  // composer for the blocked bar at once (generic wording), then ask the
+  // server which side it is so "You blocked ..." + Unblock can be shown.
+  const onSendBlocked = () => {
+    flashErrorMessage(LanguageKeys.chatErrorBlocked);
+    setIsBlockedYou(true);
+
+    const partnerId = otherUserData?.id;
+    if (!partnerId) return;
+    const me = currentUser?.id;
+    messageServices
+      .getConversationWithUser(partnerId)
+      .then((conversation) => {
+        if (!conversation) return;
+        const myRow = getMyParticipant(conversation, me);
+        const iBlocked = !!getOtherParticipant(conversation, me)?.is_blocked;
+        const theyBlocked = !!myRow?.is_blocked;
+        if (iBlocked || theyBlocked) {
+          setIsBlockedByYou(iBlocked);
+          setIsBlockedYou(theyBlocked);
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('[SingleChat] Block state lookup failed:', error);
+      });
+  };
+
+  const { onSendPress, retryMessage, discardMessage } = useSendMessage({
+    entryKey,
     otherUserData,
     conversationData,
     setConversationData,
@@ -1215,9 +1208,99 @@ const SingleChat = (props: any) => {
     setMessages,
     conversationId,
     setConversationId,
+    currentUserId: currentUser?.id,
     isBlockedByYou,
-    setInputMessage,
+    setInputMessage: setInputText,
+    onBlocked: onSendBlocked,
+    onWaitForReply: () => setServerSaysWait(true),
+    onConversationStarted: () => setCreatedHere(true),
   });
+
+  const waitingForReply = isWaitingForReply({
+    gender: currentUser?.gender,
+    currentUserId: currentUser?.id,
+    messages,
+    createdHere,
+    serverSaysWait,
+  });
+
+  // The "seen" avatar sits under one bubble. Computed once per list change
+  // here instead of sorting the whole list inside every rendered bubble.
+  const lastSeenMessageId = useMemo(() => {
+    const index = getLastSeenMessageIndex(
+      messages,
+      currentUser?.id,
+      otherUserData?.id
+    );
+    return index >= 0 ? messages[index]?.id : null;
+  }, [messages, currentUser?.id, otherUserData?.id]);
+
+  // A resend would only be rejected again: while waiting for a reply, or once
+  // either side has blocked the other.
+  const isChatBlocked = isBlockedYou || isBlockedByYou;
+  const isRetryFutile = (message: ChatMessage) =>
+    isChatBlocked ||
+    (waitingForReply && message.failure_code === 'WAIT_FOR_REPLY');
+
+  const onFailedMessagePress = (message: ChatMessage) => {
+    if (isRetryFutile(message)) return;
+    if (message.local_id) retryMessage(message.local_id);
+  };
+
+  const onFailedMessageLongPress = (message: ChatMessage) => {
+    const localId = message.local_id;
+    if (!localId) return;
+    Alert.alert(t(LanguageKeys.chatSendFailed), undefined, [
+      ...(isRetryFutile(message)
+        ? []
+        : [
+            {
+              text: t(LanguageKeys.chatRetry),
+              onPress: () => retryMessage(localId),
+            },
+          ]),
+      {
+        text: t(LanguageKeys.chatDeleteUnsent),
+        style: 'destructive',
+        onPress: () => discardMessage(localId),
+      },
+      { text: t(LanguageKeys.cancel), style: 'cancel' },
+    ]);
+  };
+
+  // Report: long-press a received message -> pick a reason -> send.
+  const [reportTarget, setReportTarget] = useState<ChatMessage | null>(null);
+  const isSupportChat =
+    conversationData?.type === 'support' || otherUserData?.type === 'Admin';
+
+  const closeReportPicker = () => setReportTarget(null);
+
+  // Messages whose report request is still running: a quick second pick must
+  // not file the same report twice.
+  const reportingIdsRef = useRef<Set<number>>(new Set());
+
+  const onReportReasonPress = async (item: { value?: string }) => {
+    const target = reportTarget;
+    if (!target || !item?.value || item.value === 'cancel') return;
+    if (reportingIdsRef.current.has(target.id)) return;
+    reportingIdsRef.current.add(target.id);
+    try {
+      await messageServices.reportMessage(target.id, { reason: item.value });
+      flashSuccessMessage(LanguageKeys.chatReportSent);
+    } catch (error: unknown) {
+      flashErrorMessage(chatErrorMessageKey(error));
+    } finally {
+      reportingIdsRef.current.delete(target.id);
+    }
+  };
+
+  const reportPickerData = [
+    ...REPORT_REASONS.map((reason) => ({
+      label: t(reason.labelKey),
+      value: reason.value,
+    })),
+    { label: t(LanguageKeys.cancel), value: 'cancel' },
+  ];
 
   useEffect(() => {
     const unsubscribe = props.navigation.addListener('blur', () => {
@@ -1226,9 +1309,8 @@ const SingleChat = (props: any) => {
         'chat_activity',
         currentUser?.created_at
       );
-      // Allow the bulk mark-all-read to fire again next time this screen
-      // regains focus (e.g. messages arrived while the user was elsewhere).
-      hasMarkedAllOnFocusRef.current = false;
+      // A half-recorded voice note is dropped when the member leaves.
+      void abortVoiceRecordingRef.current();
     });
     return unsubscribe;
   }, [props.navigation, currentUser?.created_at, stopAudioPlayback]);
@@ -1281,43 +1363,61 @@ const SingleChat = (props: any) => {
     flashInfoMessage(LanguageKeys.disabledChatDescription);
   };
 
-  const onWaliPress = () => {
-    props.navigation.navigate('AddWali', { fromSettings: true });
-  };
-
   const onViewProfilePress = () => {
     props.navigation.navigate('UserProfile', { userData: otherUserData });
   };
 
+  const onRetryLoad = () => {
+    if (conversationId) {
+      void fetchMessages();
+    } else {
+      retryResolution();
+    }
+  };
+
   const onIcebreakerSelect = (text: string) => {
-    setInputMessage(text);
+    setInputText(text);
     inputRef.current?.focus();
   };
 
   // Offer greeting suggestions only before the very first message — never
   // once any chat history exists. The intro panel follows the same rule.
   const showIcebreakers =
-    !loader && messages.length === 0 && !isBlockedYou && !isBlockedByYou;
+    !loader &&
+    !loadError &&
+    resolved &&
+    messages.length === 0 &&
+    !isBlockedYou &&
+    !isBlockedByYou &&
+    !isPartnerDeleted;
 
   const renderThreadIntro = () => (
     <MatchIntroCard
       otherUserData={otherUserData}
       isBlockedYou={isBlockedYou}
-      onViewProfilePress={onViewProfilePress}
+      onViewProfilePress={isPartnerDeleted ? undefined : onViewProfilePress}
       quote={quote || undefined}
     />
   );
 
-  const handleSubmitEditing = async () => {
-    if (inputMessage.trim().length > 0 && !isSending) {
-      const res = await onSendPress(inputMessage);
+  // Sends whatever is in the composer. Returns right away: the message shows
+  // up as a bubble immediately and the request settles in the background.
+  const submitComposerText = () => {
+    const text = inputMessageRef.current;
+    if (text.trim().length === 0 || !resolved || waitingForReply) return;
 
-      if (res?.type === 'blockedByYou') {
-        flashErrorMessage(
-          `Unblock ${otherUserData?.name || 'this member'} to send a message.`
-        );
-      }
+    lastSendAtRef.current = Date.now();
+    const res = onSendPress(text);
+
+    if (res.type === 'blockedByYou') {
+      flashErrorMessage(
+        `Unblock ${otherUserData?.name || 'this member'} to send a message.`
+      );
     }
+  };
+
+  const handleSubmitEditing = () => {
+    submitComposerText();
   };
 
   // Unblock directly from the inline composer bar shown when you've blocked
@@ -1335,10 +1435,10 @@ const SingleChat = (props: any) => {
         conversationIdNum,
         otherUserData.id
       );
-      _setIsBlockedByYou(false);
+      setIsBlockedByYou(false);
       flashSuccessMessage(LanguageKeys.unBlocked);
-    } catch {
-      flashErrorMessage(LanguageKeys.somethingWentWrong);
+    } catch (error: unknown) {
+      flashErrorMessage(chatErrorMessageKey(error));
     } finally {
       setIsUnblocking(false);
     }
@@ -1352,6 +1452,12 @@ const SingleChat = (props: any) => {
   };
 
   const startVoiceRecording = async () => {
+    if (!resolved) return;
+    // A voice note cannot open a chat: say so before the member records.
+    if (getSendTarget(conversationData, conversationId).kind === 'new') {
+      flashErrorMessage(LanguageKeys.chatVoiceNeedsText);
+      return;
+    }
     await stopAudioPlayback();
 
     const hasPermission = await chatAudioService.requestRecordPermission();
@@ -1361,6 +1467,8 @@ const SingleChat = (props: any) => {
     }
 
     try {
+      voiceSessionRef.current += 1;
+      heldRecordingRef.current = null;
       setVoiceElapsedSeconds(0);
       setVoiceWaveformPeaks([]);
       await chatAudioService.startRecording({
@@ -1371,15 +1479,21 @@ const SingleChat = (props: any) => {
           });
         },
       });
+      // The member left (or the app was backgrounded) while the recorder was
+      // starting: do not leave it running unseen.
+      if (
+        !isScreenFocusedRef.current ||
+        AppState.currentState === 'background'
+      ) {
+        await chatAudioService.cancelRecording();
+        return;
+      }
       setIsRecordingVoice(true);
+      // Capped here; the effect below stops the recorder at the cap.
       voiceTimerRef.current = setInterval(() => {
-        setVoiceElapsedSeconds((seconds) => {
-          if (seconds >= 60) {
-            clearVoiceTimer();
-            return 60;
-          }
-          return seconds + 1;
-        });
+        setVoiceElapsedSeconds((seconds) =>
+          Math.min(seconds + 1, MAX_VOICE_SECONDS)
+        );
       }, 1000);
     } catch (error) {
       flashErrorMessage(LanguageKeys.microphonePermissionDenied);
@@ -1388,21 +1502,51 @@ const SingleChat = (props: any) => {
 
   const cancelVoiceRecording = async () => {
     clearVoiceTimer();
-    await chatAudioService.cancelRecording();
+    // Drops a held (cap-reached) note too: the file is simply unreferenced.
+    voiceSessionRef.current += 1;
+    heldRecordingRef.current = null;
     setIsRecordingVoice(false);
     setVoiceElapsedSeconds(0);
-    setVoiceWaveformPeaks([]);
+    setVoiceWaveformPeaks((previous) => (previous.length ? [] : previous));
+    try {
+      await chatAudioService.cancelRecording();
+    } catch (error) {
+      console.error('[SingleChat] Error cancelling recording:', error);
+    }
   };
 
   const sendVoiceRecording = async () => {
-    if (isSendingVoice) return;
+    if (isSendingVoiceRef.current) return;
+    // A voice note cannot open a chat: drop the recording and close the bar.
+    if (getSendTarget(conversationData, conversationId).kind === 'new') {
+      await cancelVoiceRecording();
+      flashErrorMessage(LanguageKeys.chatVoiceNeedsText);
+      return;
+    }
+    isSendingVoiceRef.current = true;
     setIsSendingVoice(true);
     clearVoiceTimer();
+    // Cancelled, left or re-targeted at another chat while stopping: the note
+    // is dropped, never sent to whichever chat is on screen by then.
+    const session = voiceSessionRef.current;
     try {
-      const recording = await chatAudioService.stopRecording(
-        Math.max(1, voiceElapsedSeconds)
-      );
-      await onSendPress({
+      // The cap may have stopped the recorder already (note held) or be in the
+      // middle of stopping it: never call stopRecording a second time.
+      const pendingHold = holdPromiseRef.current;
+      if (pendingHold) await pendingHold;
+      let recording = heldRecordingRef.current;
+      if (!recording) {
+        // A stop that was in flight failed or was cancelled: nothing to send.
+        if (pendingHold) return;
+        recording = await chatAudioService.stopRecording(
+          Math.max(1, voiceElapsedSeconds)
+        );
+      }
+      if (session !== voiceSessionRef.current) return;
+      heldRecordingRef.current = null;
+      // The recording is handed to a bubble that keeps the file: if the upload
+      // fails the member taps it to retry instead of re-recording.
+      onSendPress({
         type: 'audio',
         audio: {
           uri: recording.uri,
@@ -1415,10 +1559,77 @@ const SingleChat = (props: any) => {
       setIsRecordingVoice(false);
       setVoiceElapsedSeconds(0);
       setVoiceWaveformPeaks([]);
+    } catch (error) {
+      console.error('[SingleChat] Error sending voice note:', error);
+      if (session === voiceSessionRef.current) {
+        await cancelVoiceRecording();
+        flashErrorMessage(LanguageKeys.somethingWentWrong);
+      }
     } finally {
+      isSendingVoiceRef.current = false;
       setIsSendingVoice(false);
     }
   };
+
+  // At the length cap: stop the recorder and keep the finished note so the
+  // member can still review it and press Send (or Cancel). Nothing is sent
+  // without that tap; the timer stays frozen at the cap.
+  const holdVoiceRecording = () => {
+    // Send already owns the recorder (it stops it itself).
+    if (isSendingVoiceRef.current) return;
+    if (holdPromiseRef.current || heldRecordingRef.current) return;
+    clearVoiceTimer();
+    const session = voiceSessionRef.current;
+    const hold = (async () => {
+      try {
+        const recording =
+          await chatAudioService.stopRecording(MAX_VOICE_SECONDS);
+        // Cancelled / left while stopping: the note is dropped.
+        if (session !== voiceSessionRef.current) return;
+        heldRecordingRef.current = recording;
+      } catch (error) {
+        console.error('[SingleChat] Error stopping recording at cap:', error);
+        if (session === voiceSessionRef.current) {
+          await cancelVoiceRecording();
+          flashErrorMessage(LanguageKeys.somethingWentWrong);
+        }
+      } finally {
+        holdPromiseRef.current = null;
+      }
+    })();
+    holdPromiseRef.current = hold;
+  };
+
+  // Always the latest versions, for callers that outlive a render.
+  const holdVoiceRecordingRef = useRef(holdVoiceRecording);
+  useEffect(() => {
+    abortVoiceRecordingRef.current = cancelVoiceRecording;
+    holdVoiceRecordingRef.current = holdVoiceRecording;
+    resetForNewEntryRef.current = () => {
+      messagesRef.current = [];
+      setMessages([]);
+      setCreatedHere(false);
+      setServerSaysWait(false);
+      // Nothing typed, recorded, played or opened for the previous chat may
+      // follow the member into this one.
+      setInputText('');
+      void abortVoiceRecordingRef.current();
+      void stopAudioPlayback();
+      setIsOtherUserTyping(false);
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
+      }
+      setReportTarget(null);
+      setMessagePressedId(null);
+    };
+  });
+
+  useEffect(() => {
+    if (isRecordingVoice && voiceElapsedSeconds >= MAX_VOICE_SECONDS) {
+      holdVoiceRecordingRef.current();
+    }
+  }, [isRecordingVoice, voiceElapsedSeconds]);
 
   return (
     <Container>
@@ -1439,6 +1650,8 @@ const SingleChat = (props: any) => {
         currentUserId={currentUser?.id}
         isBlockedByYou={isBlockedByYou}
         isBlockedYou={isBlockedYou}
+        onBlockedByYouChange={setIsBlockedByYou}
+        isPartnerDeleted={isPartnerDeleted}
         setMessages={setMessages}
       />
       <NotificationPermissionBanner />
@@ -1447,19 +1660,6 @@ const SingleChat = (props: any) => {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={Styles.innerContainer}>
-          {/* Wali/guardian banner hidden for now (comment out only, per
-            explicit direction -- guardian is core functionality, not being
-            removed).
-        {guardian ? (
-          <Ripple style={Styles.guardianTextWrapper} onPress={onWaliPress}>
-            <Text style={Styles.guardianText}>{t('monitoredByWali')}</Text>
-          </Ripple>
-        ) : currentUser?.gender === 'female' ? (
-          <Ripple style={Styles.guardianTextWrapper} onPress={onWaliPress}>
-            <Text style={Styles.guardianText}>{t('addAWali')}</Text>
-          </Ripple>
-        ) : null} */}
-
           {/* Typing Indicator */}
           {isOtherUserTyping && (
             <TypingIndicator userName={otherUserData?.name} />
@@ -1472,6 +1672,45 @@ const SingleChat = (props: any) => {
                 size={'small'}
                 style={Styles.chatLoader}
               />
+            ) : loadError ? (
+              <View
+                style={{
+                  flex: 1,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  paddingHorizontal: wp(8),
+                  gap: wp(4),
+                }}
+              >
+                <Text
+                  style={{
+                    color: Colors.muted,
+                    fontSize: wp(3.6),
+                    textAlign: 'center',
+                  }}
+                >
+                  {t(LanguageKeys.chatLoadFailed)}
+                </Text>
+                <TouchableOpacity
+                  onPress={onRetryLoad}
+                  style={{
+                    paddingVertical: wp(2.5),
+                    paddingHorizontal: wp(6),
+                    borderRadius: wp(6),
+                    backgroundColor: Colors.primary,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: Colors.color2,
+                      fontWeight: '600',
+                      fontSize: wp(3.6),
+                    }}
+                  >
+                    {t(LanguageKeys.tryAgain)}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             ) : messages?.length ? (
               <VirtualizedList
                 onScrollBeginDrag={onScrollBegin}
@@ -1485,19 +1724,27 @@ const SingleChat = (props: any) => {
                 data={messages}
                 inverted
                 style={Styles.messagesList}
-                renderItem={({ item, index }) => {
+                renderItem={({ item }) => {
                   const currentUserId = currentUser?.id;
 
                   return (
                     <MessageBubble
                       item={item}
-                      index={index}
                       currentUserId={currentUserId}
                       guardianUserId={currentUser?.user?.id}
                       otherUserId={otherUserData?.id}
                       otherUserImage={otherUserData?.image}
                       isBlockedYou={isBlockedYou}
-                      messages={messages}
+                      isLastSeenMessage={item.id === lastSeenMessageId}
+                      isWaitingForReply={waitingForReply}
+                      isChatBlocked={isBlockedYou || isBlockedByYou}
+                      onFailedPress={onFailedMessagePress}
+                      onFailedLongPress={onFailedMessageLongPress}
+                      onReportPress={
+                        !isSupportChat && canReportMessage(item, currentUserId)
+                          ? setReportTarget
+                          : undefined
+                      }
                       messagePressedId={messagePressedId}
                       onMessagePress={onMessagePress}
                       getAudioPlayback={getAudioPlayback}
@@ -1509,7 +1756,11 @@ const SingleChat = (props: any) => {
                 contentContainerStyle={Styles.messagesListContainer}
                 getItem={(data, index) => data[index]}
                 getItemCount={(data) => data.length}
-                keyExtractor={(item: any) => String(item.id)}
+                // Stable across the bubble -> server message hand-over (which changes
+                // `id` but keeps `local_id`), so the row is not remounted.
+                keyExtractor={(item: ChatMessage) =>
+                  item.local_id ?? String(item.id)
+                }
                 onEndReached={loadOlderMessages}
                 onEndReachedThreshold={0.5}
                 ListFooterComponent={
@@ -1532,7 +1783,38 @@ const SingleChat = (props: any) => {
             {showIcebreakers && !isRecordingVoice && (
               <IcebreakerChips onSelect={onIcebreakerSelect} rtl={Rtl} />
             )}
-            {isRecordingVoice ? (
+            {loadError === 'resolve' ? null : isPartnerDeleted ? (
+              // The member's account is gone: history stays readable, but
+              // there is no one to message.
+              <View
+                style={{
+                  flexDirection: Rtl ? 'row-reverse' : 'row',
+                  alignItems: 'center',
+                  paddingVertical: wp(3.5),
+                  paddingHorizontal: wp(4),
+                  borderTopWidth: 1,
+                  borderTopColor: Colors.hairline,
+                  gap: wp(3),
+                }}
+              >
+                <Ionicons
+                  name="information-circle-outline"
+                  size={wp(5)}
+                  color={Colors.muted}
+                />
+                <Text
+                  style={{
+                    flex: 1,
+                    color: Colors.muted,
+                    fontSize: wp(3.4),
+                    textAlign: Rtl ? 'right' : 'left',
+                  }}
+                  numberOfLines={2}
+                >
+                  {t(LanguageKeys.chatPartnerUnavailable)}
+                </Text>
+              </View>
+            ) : isRecordingVoice ? (
               <VoiceRecorderBar
                 elapsedSeconds={voiceElapsedSeconds}
                 isSending={isSendingVoice}
@@ -1564,9 +1846,9 @@ const SingleChat = (props: any) => {
                   }}
                   numberOfLines={2}
                 >
-                  {`You blocked ${
-                    otherUserData?.name || 'this member'
-                  }. Unblock to send messages.`}
+                  {t(LanguageKeys.chatYouBlockedMember, {
+                    name: otherUserData?.name || 'this member',
+                  })}
                 </Text>
                 <TouchableOpacity
                   onPress={onUnblockFromComposer}
@@ -1590,6 +1872,63 @@ const SingleChat = (props: any) => {
                     {t(LanguageKeys.unBlock)}
                   </Text>
                 </TouchableOpacity>
+              </View>
+            ) : isBlockedYou ? (
+              // The other member blocked you (or the server refused a send):
+              // nothing to unblock from here, just say so.
+              <View
+                style={{
+                  flexDirection: Rtl ? 'row-reverse' : 'row',
+                  alignItems: 'center',
+                  paddingVertical: wp(3.5),
+                  paddingHorizontal: wp(4),
+                  borderTopWidth: 1,
+                  borderTopColor: Colors.hairline,
+                  gap: wp(3),
+                }}
+              >
+                <Ionicons name="ban" size={wp(5)} color={Colors.muted} />
+                <Text
+                  style={{
+                    flex: 1,
+                    color: Colors.muted,
+                    fontSize: wp(3.4),
+                    textAlign: Rtl ? 'right' : 'left',
+                  }}
+                  numberOfLines={2}
+                >
+                  {t(LanguageKeys.chatErrorBlocked)}
+                </Text>
+              </View>
+            ) : waitingForReply ? (
+              // Men must wait for the first reply before sending again.
+              <View
+                style={{
+                  flexDirection: Rtl ? 'row-reverse' : 'row',
+                  alignItems: 'center',
+                  paddingVertical: wp(3.5),
+                  paddingHorizontal: wp(4),
+                  borderTopWidth: 1,
+                  borderTopColor: Colors.hairline,
+                  gap: wp(3),
+                }}
+              >
+                <Ionicons
+                  name="time-outline"
+                  size={wp(5)}
+                  color={Colors.muted}
+                />
+                <Text
+                  style={{
+                    flex: 1,
+                    color: Colors.muted,
+                    fontSize: wp(3.4),
+                    textAlign: Rtl ? 'right' : 'left',
+                  }}
+                  numberOfLines={2}
+                >
+                  {t(LanguageKeys.chatWaitForReplyHint)}
+                </Text>
               </View>
             ) : (
               <View
@@ -1622,22 +1961,16 @@ const SingleChat = (props: any) => {
                         ? Colors.primaryLite
                         : Colors.primary,
                   }}
-                  disabled={isSending}
                   onPress={async () => {
-                    if (isSending) return;
-                    if (inputMessage.trim().length === 0) {
+                    if (!resolved) return;
+                    if (inputMessageRef.current.trim().length === 0) {
+                      // A second tap right after a send must not start a
+                      // recording (the icon is still 'send' until re-render).
+                      if (Date.now() - lastSendAtRef.current < 600) return;
                       await startVoiceRecording();
                       return;
                     }
-                    const res = await onSendPress(inputMessage);
-
-                    if (res?.type === 'blockedByYou') {
-                      flashErrorMessage(
-                        `Unblock ${
-                          otherUserData?.name || 'this member'
-                        } to send a message.`
-                      );
-                    }
+                    submitComposerText();
                   }}
                 >
                   <Ionicons
@@ -1656,6 +1989,13 @@ const SingleChat = (props: any) => {
           </View>
         </View>
       </KeyboardAvoidingView>
+      <ButtonPicker
+        visible={!!reportTarget}
+        data={reportPickerData}
+        headerTitle={t(LanguageKeys.chatReportReasonTitle)}
+        onButtonPress={onReportReasonPress}
+        onClose={closeReportPicker}
+      />
     </Container>
   );
 };

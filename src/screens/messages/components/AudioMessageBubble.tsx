@@ -5,7 +5,9 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { wp } from '../../../global';
 import { Colors } from '../../../res';
 import { getMessageTime } from '../SingleChat.utils';
-import MessageStatusIcon from './MessageStatusIcon';
+import MessageStatusIcon, {
+  type MessageDisplayStatus,
+} from './MessageStatusIcon';
 
 export type AudioPlaybackStatus = 'idle' | 'loading' | 'playing' | 'paused';
 
@@ -21,7 +23,7 @@ type Props = {
   isCurrentUser: boolean;
   textColour: string;
   isRead: boolean;
-  messageStatus: 'sending' | 'sent';
+  messageStatus: MessageDisplayStatus;
   isBlockedYou: boolean;
   playback: AudioBubblePlayback;
   onTogglePlayback: (item: any) => void;
