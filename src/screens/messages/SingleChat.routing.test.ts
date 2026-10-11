@@ -1,5 +1,7 @@
 import type { Conversation } from '../../services/api/types/message-types';
 import {
+  captureSendTarget,
+  deliveryTarget,
   getOtherParticipant,
   getSendTarget,
   hasHeaderFields,
@@ -245,5 +247,132 @@ describe('getSendTarget', () => {
       kind: 'existing',
       conversationId: 12,
     });
+  });
+});
+
+describe('captureSendTarget / deliveryTarget', () => {
+  it('captures the conversation id when one is known', () => {
+    expect(
+      captureSendTarget({
+        conversationData: { id: 7 },
+        conversationId: '',
+        receiverId: 5,
+        created: new Map(),
+      })
+    ).toEqual({
+      kind: 'existing',
+      conversationId: 7,
+    });
+    expect(
+      captureSendTarget({
+        conversationData: {},
+        conversationId: '12',
+        receiverId: 5,
+        created: new Map(),
+      })
+    ).toEqual({
+      kind: 'existing',
+      conversationId: 12,
+    });
+  });
+
+  it('captures the receiver for a brand-new chat', () => {
+    expect(
+      captureSendTarget({
+        conversationData: {},
+        conversationId: '',
+        receiverId: 5,
+        created: new Map(),
+      })
+    ).toEqual({
+      kind: 'new',
+      receiverId: 5,
+    });
+    expect(
+      captureSendTarget({
+        conversationData: {},
+        conversationId: '',
+        receiverId: '5',
+        created: new Map(),
+      })
+    ).toEqual({
+      kind: 'new',
+      receiverId: 5,
+    });
+  });
+
+  it('reuses a conversation this screen already created with that receiver', () => {
+    expect(
+      captureSendTarget({
+        conversationData: {},
+        conversationId: '',
+        receiverId: 5,
+        created: new Map([['5', 40]]),
+      })
+    ).toEqual({
+      kind: 'existing',
+      conversationId: 40,
+    });
+    // Created with someone else: not reused.
+    expect(
+      captureSendTarget({
+        conversationData: {},
+        conversationId: '',
+        receiverId: 5,
+        created: new Map([['6', 40]]),
+      })
+    ).toEqual({
+      kind: 'new',
+      receiverId: 5,
+    });
+  });
+
+  it('is null when there is neither a conversation nor a receiver', () => {
+    expect(
+      captureSendTarget({
+        conversationData: {},
+        conversationId: '',
+        receiverId: undefined,
+        created: new Map(),
+      })
+    ).toBeNull();
+    expect(
+      captureSendTarget({
+        conversationData: {},
+        conversationId: '',
+        receiverId: 'abc',
+        created: new Map(),
+      })
+    ).toBeNull();
+  });
+
+  it('a queued follow-up chains onto the conversation created for ITS receiver', () => {
+    const created = new Map<string, number>();
+    const followUp = captureSendTarget({
+      conversationData: {},
+      conversationId: '',
+      receiverId: 5,
+      created,
+    });
+    // Meanwhile the first message created the conversation with member 5,
+    // and the screen was re-targeted at member 6.
+    created.set('5', 40);
+    expect(deliveryTarget(followUp!, created)).toEqual({
+      kind: 'existing',
+      conversationId: 40,
+    });
+    expect(deliveryTarget({ kind: 'new', receiverId: 6 }, created)).toEqual({
+      kind: 'new',
+      receiverId: 6,
+    });
+  });
+
+  it('never redirects an existing-conversation send', () => {
+    expect(
+      deliveryTarget(
+        { kind: 'existing', conversationId: 7 },
+        new Map([['5', 40]])
+      )
+    ).toEqual({ kind: 'existing', conversationId: 7 });
   });
 });

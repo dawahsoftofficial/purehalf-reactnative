@@ -26,7 +26,11 @@ import {
   resolvePending,
   retryPending,
 } from '../optimisticMessages';
-import { getSendTarget } from '../SingleChat.routing';
+import {
+  type CapturedSendTarget,
+  captureSendTarget,
+  deliveryTarget,
+} from '../SingleChat.routing';
 import { startedFreshConversation } from '../waitForReply';
 
 type OtherUserData = {
@@ -35,6 +39,12 @@ type OtherUserData = {
 };
 
 type UseSendMessageParams = {
+  /**
+   * Which chat the screen shows (`useChatResolution().entryKey`). Changes when
+   * a push / banner re-targets the open screen at another chat; work started
+   * for the previous entry then stops touching the screen.
+   */
+  entryKey: string;
   otherUserData: OtherUserData;
   conversationData: Conversation | null | undefined;
   setConversationData: (conversation: Conversation) => void;
@@ -92,6 +102,17 @@ type Outgoing =
   | { kind: 'text'; body: string }
   | { kind: 'audio'; audio: PendingAudio };
 
+/**
+ * Captured when the member presses send (or retries): where the message goes
+ * and which screen entry it belongs to. Sends are queued, so by the time one
+ * runs the screen may show another chat; the message still goes to `target`,
+ * and only touches the screen while `generation` is still current.
+ */
+type SendContext = {
+  target: CapturedSendTarget;
+  generation: number;
+};
+
 const toAudioPayload = (audio: PendingAudio): AudioSendInput => ({
   type: 'audio',
   audio: { uri: audio.uri, name: audio.name, type: audio.type },
@@ -100,6 +121,7 @@ const toAudioPayload = (audio: PendingAudio): AudioSendInput => ({
 });
 
 export function useSendMessage({
+  entryKey,
   otherUserData,
   conversationData,
   setConversationData,
@@ -134,17 +156,28 @@ export function useSendMessage({
     onConversationStarted,
   };
 
+  // Bumped whenever the screen is re-targeted at another chat (A -> B -> A
+  // too), so a send that settles later knows its bubble is gone.
+  const entryRef = useRef({ key: entryKey, generation: 0 });
+  if (entryRef.current.key !== entryKey) {
+    entryRef.current = {
+      key: entryKey,
+      generation: entryRef.current.generation + 1,
+    };
+  }
+  const isCurrentEntry = (context: SendContext) =>
+    context.generation === entryRef.current.generation;
+
   // Sends run one after another so messages reach the server in the order they
   // were typed (the first message of a new chat must finish before the next
   // knows its conversation id). The UI never waits for the queue.
   const queueRef = useRef<Promise<void>>(Promise.resolve());
-  // A conversation this hook just created (or found), before the screen state
-  // has caught up with `setConversationId`. Tied to the member it is with, so
-  // a screen re-targeted at someone else never reuses it.
-  const createdConversationRef = useRef<{
-    receiverId: number;
-    id: number;
-  } | null>(null);
+  // Conversations this hook created (or found) per receiver id, before the
+  // screen state has caught up with `setConversationId`. Keyed by the
+  // receiver captured at send time, so a screen re-targeted at someone else
+  // never reuses it, and a follow-up queued for the first receiver still
+  // finds it.
+  const createdConversationsRef = useRef(new Map<string, number>());
 
   // Bubbles whose retry is queued or running (a double tap must not send twice).
   const retryGuardRef = useRef(createInFlightGuard());
@@ -153,21 +186,16 @@ export function useSendMessage({
     queueRef.current = queueRef.current.then(task, task).catch(() => {});
   };
 
-  const currentTarget = () => {
+  /** The screen's send target right now (call at send / retry time only). */
+  const captureContext = (): SendContext | null => {
     const latest = latestRef.current;
-    const target = getSendTarget(
-      latest.conversationData,
-      latest.conversationId
-    );
-    const created = createdConversationRef.current;
-    if (
-      target.kind === 'new' &&
-      created &&
-      created.receiverId === latest.otherUserData?.id
-    ) {
-      return { kind: 'existing' as const, conversationId: created.id };
-    }
-    return target;
+    const target = captureSendTarget({
+      conversationData: latest.conversationData,
+      conversationId: latest.conversationId,
+      receiverId: latest.otherUserData?.id,
+      created: createdConversationsRef.current,
+    });
+    return target ? { target, generation: entryRef.current.generation } : null;
   };
 
   const handleSendError = (chatError: ReturnType<typeof toChatApiError>) => {
@@ -196,10 +224,23 @@ export function useSendMessage({
     }
   };
 
-  /** Sends one bubble to the server and settles it (resolved or failed). */
-  const deliver = async (localId: string, outgoing: Outgoing) => {
+  /**
+   * Sends one bubble to its captured target and settles it (resolved or
+   * failed). The request always completes for that target; the screen (ids,
+   * bubble, error UI) is only touched while it still shows the same entry.
+   */
+  const deliver = async (
+    localId: string,
+    outgoing: Outgoing,
+    context: SendContext
+  ) => {
     try {
-      const target = currentTarget();
+      // Resolved again at run time only to follow up in a conversation that
+      // an earlier message to the same receiver created meanwhile.
+      const target = deliveryTarget(
+        context.target,
+        createdConversationsRef.current
+      );
 
       if (target.kind === 'new') {
         if (outgoing.kind !== 'text') {
@@ -207,14 +248,18 @@ export function useSendMessage({
         }
         const createdConversation: Conversation =
           await messageServices.startConversation({
-            receiver_id: latestRef.current.otherUserData?.id,
+            receiver_id: target.receiverId,
             body: outgoing.body,
           });
 
-        createdConversationRef.current = {
-          receiverId: latestRef.current.otherUserData?.id,
-          id: createdConversation.id,
-        };
+        createdConversationsRef.current.set(
+          String(target.receiverId),
+          createdConversation.id
+        );
+        recordSentMessage();
+        // Re-targeted meanwhile: the chat on screen now must not change.
+        if (!isCurrentEntry(context)) return;
+
         if (startedFreshConversation(createdConversation, currentUserId)) {
           latestRef.current.onConversationStarted?.();
         }
@@ -239,13 +284,16 @@ export function useSendMessage({
             target.conversationId,
             payload
           );
+        recordSentMessage();
+        if (!isCurrentEntry(context)) return;
         setMessages((previous) =>
           resolvePending(previous, localId, sentMessage)
         );
       }
-
-      recordSentMessage();
     } catch (error: unknown) {
+      // The bubble left the screen with its chat: nothing to mark failed, and
+      // the error UI (block bar, wait hint) would land on another chat.
+      if (!isCurrentEntry(context)) return;
       const chatError = toChatApiError(error);
       setMessages((previous) =>
         failPending(previous, localId, {
@@ -263,25 +311,31 @@ export function useSendMessage({
    * page and look for the bubble's twin. Returns it when it was delivered.
    */
   const findAlreadyDelivered = async (
-    bubble: ChatMessage
+    bubble: ChatMessage,
+    context: SendContext
   ): Promise<Message | undefined> => {
     try {
       let id: number | null = null;
-      const target = currentTarget();
+      const target = deliveryTarget(
+        context.target,
+        createdConversationsRef.current
+      );
       if (target.kind === 'existing') {
         id = target.conversationId;
       } else {
         // A timed-out "start" may have created the conversation anyway.
         const found = await messageServices.getConversationWithUser(
-          latestRef.current.otherUserData?.id
+          target.receiverId
         );
         if (found) {
-          createdConversationRef.current = {
-            receiverId: latestRef.current.otherUserData?.id,
-            id: found.id,
-          };
-          setConversationId(found.id.toString());
-          setConversationData(found);
+          createdConversationsRef.current.set(
+            String(target.receiverId),
+            found.id
+          );
+          if (isCurrentEntry(context)) {
+            setConversationId(found.id.toString());
+            setConversationData(found);
+          }
           id = found.id;
         }
       }
@@ -291,7 +345,11 @@ export function useSendMessage({
         per_page: 50,
         page: 1,
       });
-      return findDeliveredTwin(bubble, fetched, latestRef.current.messages);
+      return findDeliveredTwin(
+        bubble,
+        fetched,
+        isCurrentEntry(context) ? latestRef.current.messages : []
+      );
     } catch {
       // Cannot verify (offline): sending is what the member asked for.
       return undefined;
@@ -303,7 +361,15 @@ export function useSendMessage({
       return { type: 'blockedByYou' };
     }
 
-    if (typeof input !== 'string' && currentTarget().kind === 'new') {
+    // Fixed now: the message goes here even if the screen is re-targeted
+    // at another chat before its turn in the queue comes.
+    const context = captureContext();
+    if (!context) {
+      flashErrorMessage(LanguageKeys.somethingWentWrong);
+      return { type: 'failed' };
+    }
+
+    if (typeof input !== 'string' && context.target.kind === 'new') {
       flashErrorMessage(LanguageKeys.chatVoiceNeedsText);
       return { type: 'failed' };
     }
@@ -338,7 +404,7 @@ export function useSendMessage({
       })
     );
 
-    enqueue(() => deliver(localId, outgoing));
+    enqueue(() => deliver(localId, outgoing, context));
     return { type: 'queued' };
   };
 
@@ -359,7 +425,9 @@ export function useSendMessage({
           ? { kind: 'audio', audio: bubble.pending_audio }
           : null
         : { kind: 'text', body: bubble.body };
-    if (!outgoing) {
+    // The bubble is on screen, so it belongs to the chat shown right now.
+    const context = outgoing ? captureContext() : null;
+    if (!outgoing || !context) {
       retryGuardRef.current.release(localId);
       return;
     }
@@ -369,13 +437,17 @@ export function useSendMessage({
     enqueue(async () => {
       try {
         if (bubble.may_have_sent) {
-          const twin = await findAlreadyDelivered(bubble);
+          const twin = await findAlreadyDelivered(bubble, context);
           if (twin) {
-            setMessages((previous) => resolvePending(previous, localId, twin));
+            if (isCurrentEntry(context)) {
+              setMessages((previous) =>
+                resolvePending(previous, localId, twin)
+              );
+            }
             return;
           }
         }
-        await deliver(localId, outgoing);
+        await deliver(localId, outgoing, context);
       } finally {
         retryGuardRef.current.release(localId);
       }

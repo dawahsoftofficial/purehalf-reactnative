@@ -131,6 +131,7 @@ const SingleChat = (props: any) => {
   // is on screen (see isWaitingForReply) or the chat changes.
   const [serverSaysWait, setServerSaysWait] = useState(false);
   const {
+    entryKey,
     otherUserData,
     conversationData,
     setConversationData,
@@ -1175,6 +1176,7 @@ const SingleChat = (props: any) => {
   };
 
   const { onSendPress, retryMessage, discardMessage } = useSendMessage({
+    entryKey,
     otherUserData,
     conversationData,
     setConversationData,

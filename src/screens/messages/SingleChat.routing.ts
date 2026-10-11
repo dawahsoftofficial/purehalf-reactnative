@@ -180,3 +180,56 @@ export function getSendTarget(
     ? { kind: 'existing', conversationId: id }
     : { kind: 'new' };
 }
+
+/**
+ * Where a message goes, fixed when the member presses send (or retries), so a
+ * screen re-targeted at another chat while it is queued never redirects it.
+ */
+export type CapturedSendTarget =
+  | { kind: 'existing'; conversationId: number }
+  | { kind: 'new'; receiverId: number };
+
+/**
+ * Conversations this screen created (or found) per receiver id, before the
+ * screen state has caught up. Keyed by the receiver captured at send time.
+ */
+export type CreatedConversations = ReadonlyMap<string, number>;
+
+/**
+ * Captures the send target from the screen state at send time. A brand-new
+ * chat records the receiver (not "whoever is on screen later"); returns null
+ * when neither a conversation nor a valid receiver is known.
+ */
+export function captureSendTarget({
+  conversationData,
+  conversationId,
+  receiverId,
+  created,
+}: {
+  conversationData: { id?: unknown } | null | undefined;
+  conversationId: string | number | null | undefined;
+  receiverId: unknown;
+  created: CreatedConversations;
+}): CapturedSendTarget | null {
+  const target = getSendTarget(conversationData, conversationId);
+  if (target.kind === 'existing') return target;
+  const receiver = toPositiveInt(receiverId);
+  if (receiver === null) return null;
+  return deliveryTarget({ kind: 'new', receiverId: receiver }, created);
+}
+
+/**
+ * The target to use when a queued send actually runs: a "new chat" send whose
+ * receiver got a conversation in the meantime (the first message created it)
+ * follows up in that conversation instead of starting another.
+ */
+export function deliveryTarget(
+  captured: CapturedSendTarget,
+  created: CreatedConversations
+): CapturedSendTarget {
+  if (captured.kind === 'existing') return captured;
+  const createdId = created.get(String(captured.receiverId));
+  return createdId !== undefined
+    ? { kind: 'existing', conversationId: createdId }
+    : captured;
+}
