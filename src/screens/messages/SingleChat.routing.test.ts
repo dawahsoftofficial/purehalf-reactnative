@@ -1,6 +1,7 @@
 import type { Conversation } from '../../services/api/types/message-types';
 import {
   getOtherParticipant,
+  getSendTarget,
   hasHeaderFields,
   initialOtherUser,
   isChatPartnerDeleted,
@@ -205,5 +206,26 @@ describe('initialOtherUser', () => {
   it('falls back to an id-only user', () => {
     expect(initialOtherUser({ userId: '9' })).toEqual({ id: 9 });
     expect(initialOtherUser({})).toBeUndefined();
+  });
+});
+
+describe('getSendTarget', () => {
+  it('is new when nothing identifies a conversation', () => {
+    expect(getSendTarget({}, '')).toEqual({ kind: 'new' });
+    expect(getSendTarget(undefined, undefined)).toEqual({ kind: 'new' });
+  });
+
+  it('uses the payload id', () => {
+    expect(getSendTarget({ id: 7 }, '')).toEqual({
+      kind: 'existing',
+      conversationId: 7,
+    });
+  });
+
+  it('falls back to the screen conversationId when the payload is sparse', () => {
+    expect(getSendTarget({}, '12')).toEqual({
+      kind: 'existing',
+      conversationId: 12,
+    });
   });
 });

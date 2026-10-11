@@ -153,3 +153,22 @@ export function initialOtherUser(params: RouteParams): ChatPartner | undefined {
   const userId = toPositiveInt(params?.userId);
   return userId !== null ? { id: userId } : undefined;
 }
+
+export type SendTarget =
+  | { kind: 'new' }
+  | { kind: 'existing'; conversationId: number };
+
+/**
+ * Which send path applies: an existing conversation whenever its id is known
+ * (from the payload or the screen state), `start` only for a brand-new chat.
+ */
+export function getSendTarget(
+  conversationData: { id?: unknown } | null | undefined,
+  conversationId: string | number | null | undefined
+): SendTarget {
+  const id =
+    toPositiveInt(conversationData?.id) ?? toPositiveInt(conversationId);
+  return id !== null
+    ? { kind: 'existing', conversationId: id }
+    : { kind: 'new' };
+}

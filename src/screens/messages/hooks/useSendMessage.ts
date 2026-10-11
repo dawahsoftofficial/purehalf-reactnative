@@ -12,6 +12,7 @@ import type {
 } from '../../../services/api/types/message-types';
 import { presentChatCreditsPaywall } from '../../../services/paywall-service';
 import { chatErrorMessageKey } from '../chat-error-messages';
+import { getSendTarget } from '../SingleChat.routing';
 
 type OtherUserData = {
   id: number;
@@ -98,8 +99,10 @@ export function useSendMessage({
     };
     setInputMessage('');
 
-    // New conversation - check if conversationData is null/undefined or doesn't have an id
-    if (!conversationData || !conversationData.id) {
+    // `start` only for a brand-new chat; any known conversation id (payload or
+    // screen state) takes the normal send path.
+    const target = getSendTarget(conversationData, conversationId);
+    if (target.kind === 'new') {
       if (typeof input !== 'string') {
         flashErrorMessage('Please send a text message before voice notes.');
         return false;
@@ -137,19 +140,8 @@ export function useSendMessage({
     }
 
     // Existing conversation - send message
-    if (!conversationId) {
-      restoreInputIfText();
-      flashErrorMessage('Conversation ID is missing');
-      return false;
-    }
-
     try {
-      const conversationIdNum = parseInt(conversationId, 10);
-      if (isNaN(conversationIdNum)) {
-        restoreInputIfText();
-        flashErrorMessage('Invalid conversation ID');
-        return false;
-      }
+      const conversationIdNum = target.conversationId;
 
       const payload = typeof input === 'string' ? { body: input } : input;
       const sentMessage: Message =

@@ -1,11 +1,5 @@
 import { useFocusEffect } from '@react-navigation/native';
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
@@ -38,7 +32,6 @@ import {
 } from '../../services';
 import messageServices from '../../services/api/message-services';
 import type {
-  Conversation,
   Message,
   MessageDeliveredEventData,
   MessageReadEventData,
@@ -54,15 +47,11 @@ import MessageBubble from './components/MessageBubble';
 import NotificationPermissionBanner from './components/notification-permission-banner';
 import TypingIndicator from './components/TypingIndicator';
 import VoiceRecorderBar from './components/VoiceRecorderBar';
-import { useSendMessage } from './hooks/useSendMessage';
 import {
-  getOtherParticipant,
-  hasHeaderFields,
-  initialOtherUser,
-  isChatPartnerDeleted,
-  mergeChatPartner,
-  resolveChatEntry,
-} from './SingleChat.routing';
+  type ChatResolutionServices,
+  useChatResolution,
+} from './hooks/useChatResolution';
+import { useSendMessage } from './hooks/useSendMessage';
 import Styles from './SingleChat.styles';
 import SingleChatHeader from './SingleChatHeader';
 
@@ -88,6 +77,12 @@ const isRateLimitError = (error: unknown): boolean => {
   return false;
 };
 
+const chatResolutionServices: ChatResolutionServices = {
+  getConversationWithUser: (userId) =>
+    messageServices.getConversationWithUser(userId),
+  getUserDetail: (userId) => ApiServices.getUserDetail(userId),
+};
+
 const SingleChat = (props: any) => {
   const Rtl = CheckRtl();
   const flatListRef: any = useRef(null);
@@ -95,46 +90,45 @@ const SingleChat = (props: any) => {
   const { t }: any = useTranslation();
   const { currentUser } = useGlobalContext();
   const guardian = currentUser?.guardian ? currentUser?.guardian : false;
-  const routeParams = props?.route?.params;
-  // The screen can be opened with {conversationData|convDetails}, {conversationId}
-  // or {userId}; normalise once so there is a single resolution path.
-  const chatEntry = useMemo(() => resolveChatEntry(routeParams), [routeParams]);
-  const chatEntryRef = useRef(chatEntry);
-  chatEntryRef.current = chatEntry;
-  const routeParamsRef = useRef(routeParams);
-  routeParamsRef.current = routeParams;
-  const entryKey =
-    chatEntry.kind === 'conversation'
-      ? `c:${chatEntry.conversation.id}`
-      : chatEntry.kind === 'conversationId'
-        ? `c:${chatEntry.conversationId}`
-        : chatEntry.kind === 'user'
-          ? `u:${chatEntry.userId}`
-          : 'empty';
-  const currentUserIdRef = useRef(currentUser?.id);
-  currentUserIdRef.current = currentUser?.id;
-  const [otherUserData, setOtherUserData] = useState<any>(() =>
-    initialOtherUser(routeParams)
-  );
-  // False until the real conversation (or its absence) is known; sending is
-  // held until then so a first message can't race the lookup.
-  const [resolved, setResolved] = useState(false);
-  const [loadError, setLoadError] = useState<'resolve' | 'messages' | null>(
-    null
-  );
-  const [resolveAttempt, setResolveAttempt] = useState(0);
-  const lastEntryKeyRef = useRef<string | null>(null);
-  const detailFetchedForRef = useRef<number | string | null>(null);
-  const [isBlockedByYou, _setIsBlockedByYou] = useState(false);
-  const [isBlockedYou, setIsBlockedYou] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  // Track messages to avoid race conditions between fetchMessages and Pusher events
+  const messagesRef = useRef<Message[]>([]);
+  const {
+    otherUserData,
+    conversationData,
+    setConversationData,
+    conversationId,
+    setConversationId,
+    isBlockedByYou,
+    setIsBlockedByYou: _setIsBlockedByYou,
+    isBlockedYou,
+    setIsBlockedYou,
+    loader,
+    setLoader,
+    resolved,
+    loadError,
+    setLoadError,
+    isPartnerDeleted,
+    retryResolution,
+  } = useChatResolution({
+    routeParams: props?.route?.params,
+    currentUserId: currentUser?.id,
+    services: chatResolutionServices,
+    onEntryChange: () => {
+      messagesRef.current = [];
+      setMessages([]);
+    },
+  });
+  // The conversation id (and entry) currently shown, so a slow fetch for a
+  // previous one can be discarded.
+  const activeConversationIdRef = useRef(conversationId);
+  useEffect(() => {
+    activeConversationIdRef.current = conversationId;
+  }, [conversationId]);
   const [isUnblocking, setIsUnblocking] = useState(false);
-  const [loader, setLoader] = useState(true);
   const [messagePressedId, setMessagePressedId] = useState<number | null>(null);
   const [quote, setQuote] = useState('');
 
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [conversationData, setConversationData] = useState<any>({});
-  const [conversationId, setConversationId] = useState('');
   const [audioPlayback, setAudioPlayback] = useState<ChatAudioPlaybackState>({
     messageId: null,
     status: 'idle',
@@ -151,8 +145,6 @@ const SingleChat = (props: any) => {
   const markedAsReadRef = useRef<Set<number>>(new Set());
   // Track which messages have been marked as delivered to avoid duplicate API calls
   const markedAsDeliveredRef = useRef<Set<number>>(new Set());
-  // Track messages to avoid race conditions between fetchMessages and Pusher events
-  const messagesRef = useRef<Message[]>([]);
   // Bulk mark-all-read should fire once per focus session, not on every
   // messages-array change — otherwise every single incoming message while
   // the screen stays focused re-triggers a "mark whole conversation read"
@@ -203,150 +195,6 @@ const SingleChat = (props: any) => {
     };
   }, []);
 
-  const applyConversation = useCallback((conversation: Conversation) => {
-    const me = currentUserIdRef.current;
-    const meKey = me != null ? String(me) : null;
-    const participants = conversation.participants ?? [];
-    const myParticipant = participants.find((p) => String(p.id) === meKey);
-    const otherParticipant = getOtherParticipant(conversation, me);
-
-    setConversationData(conversation);
-    setConversationId(String(conversation.id));
-
-    // The pivot `is_blocked` flag lives on the row of the participant who is
-    // blocked (i.e. cannot send). So:
-    //   - my own row blocked      => the other user blocked me => isBlockedYou
-    //   - the other's row blocked => I blocked the other user  => isBlockedByYou
-    setIsBlockedYou(!!myParticipant?.is_blocked);
-    _setIsBlockedByYou(!!otherParticipant?.is_blocked);
-
-    if (otherParticipant) {
-      setOtherUserData((previous: any) =>
-        mergeChatPartner(previous, otherParticipant)
-      );
-    }
-  }, []);
-
-  // Resolve which conversation this screen shows. Every branch ends with the
-  // loader cleared (directly, or by fetchMessages) or an error state with a
-  // retry -- never an endless spinner.
-  useEffect(() => {
-    let cancelled = false;
-
-    if (
-      lastEntryKeyRef.current !== null &&
-      lastEntryKeyRef.current !== entryKey
-    ) {
-      // Same screen instance re-targeted at another chat (params replaced).
-      messagesRef.current = [];
-      setMessages([]);
-      setConversationData({});
-      setConversationId('');
-      setIsBlockedYou(false);
-      _setIsBlockedByYou(false);
-      setOtherUserData(initialOtherUser(routeParamsRef.current));
-    }
-    lastEntryKeyRef.current = entryKey;
-
-    setLoadError(null);
-    setResolved(false);
-    setLoader(true);
-
-    const entry = chatEntryRef.current;
-
-    const resolveByUser = async (userId: number) => {
-      try {
-        const conversation =
-          await messageServices.getConversationWithUser(userId);
-        if (cancelled) return;
-        if (conversation) {
-          // The conversationId effect fetches messages and clears the loader.
-          applyConversation(conversation);
-        } else {
-          // Brand-new chat: the first send creates it.
-          setConversationData({});
-          setConversationId('');
-          setLoader(false);
-        }
-        setResolved(true);
-      } catch (error: unknown) {
-        if (cancelled) return;
-        console.error('[SingleChat] Failed to resolve conversation:', error);
-        setLoadError('resolve');
-        setLoader(false);
-      }
-    };
-
-    const resolveById = async (id: string, userId: number | null) => {
-      // Messages load right away; the lookup only enriches the participants
-      // (block flags, deleted partner) and is best-effort.
-      setConversationId(id);
-      if (userId !== null) {
-        try {
-          const conversation =
-            await messageServices.getConversationWithUser(userId);
-          if (cancelled) return;
-          if (conversation && String(conversation.id) === id) {
-            applyConversation(conversation);
-          }
-        } catch (error: unknown) {
-          console.error('[SingleChat] Participant lookup failed:', error);
-        }
-      }
-      if (!cancelled) setResolved(true);
-    };
-
-    switch (entry.kind) {
-      case 'conversation':
-        applyConversation(entry.conversation);
-        setResolved(true);
-        break;
-      case 'conversationId':
-        void resolveById(entry.conversationId, entry.userId);
-        break;
-      case 'user':
-        void resolveByUser(entry.userId);
-        break;
-      default:
-        setLoadError('resolve');
-        setLoader(false);
-    }
-
-    return () => {
-      cancelled = true;
-    };
-  }, [entryKey, resolveAttempt, applyConversation]);
-
-  const isPartnerDeleted = isChatPartnerDeleted(
-    otherUserData,
-    conversationData,
-    currentUser?.id
-  );
-
-  // getUserDetail records a profile "visit" server-side, so only call it for
-  // a live member and only when the header lacks name/image.
-  useEffect(() => {
-    const partnerId = otherUserData?.id;
-    if (!resolved || !partnerId || isPartnerDeleted) return;
-    if (otherUserData?.type && otherUserData.type !== 'User') return;
-    if (hasHeaderFields(otherUserData)) return;
-    if (detailFetchedForRef.current === partnerId) return;
-    detailFetchedForRef.current = partnerId;
-
-    ApiServices.getUserDetail(partnerId)
-      .then((res: any) => {
-        setOtherUserData((previous: any) => ({
-          ...previous,
-          ...res,
-          name: res?.name ?? res?.full_name ?? previous?.name,
-          image: res?.image ?? res?.primary_image_to_show ?? previous?.image,
-        }));
-      })
-      .catch((error: unknown) => {
-        console.error('[SingleChat] Failed to load member details:', error);
-      });
-  }, [resolved, otherUserData, isPartnerDeleted]);
-
   const fetchMessages = useCallback(async () => {
     if (!conversationId) return;
 
@@ -373,6 +221,8 @@ const SingleChat = (props: any) => {
         conversationIdNum,
         { per_page: MESSAGES_PAGE_SIZE, page: 1 }
       );
+      // The screen moved to another conversation while this was in flight.
+      if (activeConversationIdRef.current !== conversationId) return;
       currentPageRef.current = 1;
       hasMoreMessagesRef.current = fetchedMessages.length >= MESSAGES_PAGE_SIZE;
 
@@ -425,6 +275,7 @@ const SingleChat = (props: any) => {
       markedAsDeliveredRef.current.clear();
     } catch (error: unknown) {
       console.error('[SingleChat.fetchMessages] Error:', error);
+      if (activeConversationIdRef.current !== conversationId) return;
       // Don't present a failed load as an empty chat.
       if (messagesRef.current.length === 0) {
         setLoadError('messages');
@@ -1424,7 +1275,7 @@ const SingleChat = (props: any) => {
     if (conversationId) {
       void fetchMessages();
     } else {
-      setResolveAttempt((attempt) => attempt + 1);
+      retryResolution();
     }
   };
 
