@@ -717,6 +717,8 @@
     "chatSendFailed": "Message not sent",
     "chatTapToRetry": "Tap to retry",
     "chatDeleteUnsent": "Delete message",
-    "chatWaitForReplyHint": "Wait for a reply before sending another message"
+    "chatWaitForReplyHint": "Wait for a reply before sending another message",
+    "chatRetry": "Retry",
+    "chatVoiceNeedsText": "Please send a text message before voice notes."
   }
 }

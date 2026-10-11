@@ -711,6 +711,8 @@ const Keys = {
   chatTapToRetry: 'chatTapToRetry',
   chatDeleteUnsent: 'chatDeleteUnsent',
   chatWaitForReplyHint: 'chatWaitForReplyHint',
+  chatRetry: 'chatRetry',
+  chatVoiceNeedsText: 'chatVoiceNeedsText',
 };
 
 export default Keys;

@@ -14,6 +14,9 @@ import { resolveUnreadCounts } from '../chat/unreadCounts';
 import { StorageManager } from '../storageManager';
 import { ChannelRegistry } from './channel-registry';
 
+/** Private-channel auth request budget; the native side blocks until it ends. */
+const AUTH_REQUEST_TIMEOUT_MS = 10000;
+
 type PusherConfig = {
   apiKey: string;
   cluster: string;
@@ -180,6 +183,8 @@ class PusherService {
                 channel_name: channelName,
               },
               {
+                // Never hang: the native side waits on this result.
+                timeout: AUTH_REQUEST_TIMEOUT_MS,
                 headers: {
                   Authorization: `Bearer ${token}`,
                   'Content-Type': 'application/json',

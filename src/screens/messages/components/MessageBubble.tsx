@@ -35,6 +35,12 @@ type Props = {
   /** This is the message the "seen" avatar sits under (computed once by the list). */
   isLastSeenMessage: boolean;
 
+  /**
+   * The composer is locked by the wait-for-reply rule: a failed bubble then
+   * explains that instead of offering a retry that would be rejected again.
+   */
+  isWaitingForReply?: boolean;
+
   /** Tap on an unsent (failed) bubble: retry. */
   onFailedPress?: (item: ChatMessage) => void;
   /** Long-press on an unsent (failed) bubble: retry / delete menu. */
@@ -57,6 +63,7 @@ const MessageBubble = ({
   otherUserImage,
   isBlockedYou,
   isLastSeenMessage: isLastSeenMessageProp,
+  isWaitingForReply = false,
   onFailedPress,
   onFailedLongPress,
   messagePressedId,
@@ -112,6 +119,10 @@ const MessageBubble = ({
 
   const isLastSeenMessage = isCurrentUser && isLastSeenMessageProp;
   const isFailed = item?.send_status === 'failed';
+  const failedCaption =
+    isWaitingForReply && item?.failure_code === 'WAIT_FOR_REPLY'
+      ? t(LanguageKeys.chatWaitForReplyHint)
+      : `${t(LanguageKeys.chatSendFailed)} · ${t(LanguageKeys.chatTapToRetry)}`;
 
   const backgroundColor = isCurrentUser
     ? Colors.primary
@@ -202,7 +213,7 @@ const MessageBubble = ({
             style={{ marginHorizontal: wp(1) }}
           />
           <Text style={[Styles.sendingText, { color: Colors.color24 }]}>
-            {`${t(LanguageKeys.chatSendFailed)} · ${t(LanguageKeys.chatTapToRetry)}`}
+            {failedCaption}
           </Text>
         </TouchableOpacity>
       )}

@@ -4,6 +4,7 @@ import {
   addPending,
   addServerMessage,
   type ChatMessage,
+  createInFlightGuard,
   dropDeliveredPending,
   failPending,
   findDeliveredTwin,
@@ -263,6 +264,17 @@ describe('mayHaveReachedServer', () => {
       false
     );
     expect(mayHaveReachedServer({ code: 'UNKNOWN', status: 400 })).toBe(false);
+  });
+});
+
+describe('createInFlightGuard', () => {
+  it('lets only the first of two quick taps through, until it settles', () => {
+    const guard = createInFlightGuard();
+    expect(guard.tryAcquire('tmp-1')).toBe(true);
+    expect(guard.tryAcquire('tmp-1')).toBe(false);
+    expect(guard.tryAcquire('tmp-2')).toBe(true);
+    guard.release('tmp-1');
+    expect(guard.tryAcquire('tmp-1')).toBe(true);
   });
 });
 

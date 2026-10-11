@@ -1,5 +1,9 @@
 import type { ChatMessage } from './optimisticMessages';
-import { hasOtherReplied, isWaitingForReply } from './waitForReply';
+import {
+  hasOtherReplied,
+  isWaitingForReply,
+  startedFreshConversation,
+} from './waitForReply';
 
 const ME = 7;
 const msg = (id: number, extra: Partial<ChatMessage> = {}): ChatMessage =>
@@ -21,9 +25,46 @@ const mine = (id: number, extra: Partial<ChatMessage> = {}) =>
 const base = {
   gender: 'male',
   currentUserId: ME,
-  historyComplete: true,
+  createdHere: true,
   serverSaysWait: false,
 };
+
+describe('startedFreshConversation', () => {
+  const participant = (id: number, lastRead: number | null) => ({
+    id,
+    type: 'User',
+    name: 'x',
+    image: '',
+    is_blocked: 0,
+    last_seen_at: null,
+    last_read_message_id: lastRead,
+    unread_count: 0,
+  });
+  const conversation = (...participants: ReturnType<typeof participant>[]) =>
+    ({ id: 1, participants }) as never;
+
+  it('is true when the partner has not read anything yet', () => {
+    expect(
+      startedFreshConversation(
+        conversation(participant(ME, null), participant(9, null)),
+        ME
+      )
+    ).toBe(true);
+  });
+
+  it('is false when the partner has read messages: the chat already existed', () => {
+    expect(
+      startedFreshConversation(
+        conversation(participant(ME, null), participant(9, 40)),
+        ME
+      )
+    ).toBe(false);
+  });
+
+  it('is false without participants', () => {
+    expect(startedFreshConversation({ id: 1 } as never, ME)).toBe(false);
+  });
+});
 
 describe('isWaitingForReply', () => {
   it('blocks a man whose only messages are his own (full history)', () => {
@@ -68,21 +109,37 @@ describe('isWaitingForReply', () => {
     ).toBe(false);
   });
 
-  it('does not block when history is incomplete and no reply is loaded', () => {
+  it('never pre-blocks a conversation this screen did not create (e.g. after Clear chat)', () => {
+    // Clear chat hides the partner's earlier reply, so [his message] looks
+    // like "never replied" although the server will allow the send.
     expect(
       isWaitingForReply({
         ...base,
-        historyComplete: false,
+        createdHere: false,
         messages: [mine(2), mine(1)],
       })
     ).toBe(false);
   });
 
-  it('blocks on the server saying so, even with incomplete history', () => {
+  it('does not pre-block when start appended to an existing conversation', () => {
+    // onConversationStarted is not called for an append, so createdHere stays false.
+    expect(
+      isWaitingForReply({ ...base, createdHere: false, messages: [mine(1)] })
+    ).toBe(false);
+  });
+
+  it('locks a brand-new chat after the first message, until the reply', () => {
+    expect(isWaitingForReply({ ...base, messages: [mine(1)] })).toBe(true);
+    expect(isWaitingForReply({ ...base, messages: [msg(2), mine(1)] })).toBe(
+      false
+    );
+  });
+
+  it('blocks on the server saying so, even in a conversation not created here', () => {
     expect(
       isWaitingForReply({
         ...base,
-        historyComplete: false,
+        createdHere: false,
         serverSaysWait: true,
         messages: [mine(1)],
       })

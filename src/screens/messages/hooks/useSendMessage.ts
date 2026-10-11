@@ -3,6 +3,7 @@ import { useRef } from 'react';
 
 import { recordSentMessage } from '@/services/rating/ratingEngagement';
 
+import LanguageKeys from '../../../languages/Keys';
 import { flashErrorMessage } from '../../../services';
 import { toChatApiError } from '../../../services/api/chat-errors';
 import messageServices from '../../../services/api/message-services';
@@ -15,6 +16,7 @@ import { chatErrorMessageKey } from '../chat-error-messages';
 import {
   addPending,
   type ChatMessage,
+  createInFlightGuard,
   failPending,
   findDeliveredTwin,
   mayHaveReachedServer,
@@ -25,6 +27,7 @@ import {
   retryPending,
 } from '../optimisticMessages';
 import { getSendTarget } from '../SingleChat.routing';
+import { startedFreshConversation } from '../waitForReply';
 
 type OtherUserData = {
   id: number;
@@ -55,8 +58,8 @@ type UseSendMessageParams = {
    */
   onWaitForReply?: () => void;
   /**
-   * Called when the first message created a brand-new conversation, so the
-   * screen knows the whole history is just that message.
+   * Called when `start` created a brand-new conversation (not when it appended
+   * to an existing one), so the screen knows the visible history is complete.
    */
   onConversationStarted?: () => void;
 };
@@ -143,6 +146,9 @@ export function useSendMessage({
     id: number;
   } | null>(null);
 
+  // Bubbles whose retry is queued or running (a double tap must not send twice).
+  const retryGuardRef = useRef(createInFlightGuard());
+
   const enqueue = (task: () => Promise<void>) => {
     queueRef.current = queueRef.current.then(task, task).catch(() => {});
   };
@@ -209,7 +215,9 @@ export function useSendMessage({
           receiverId: latestRef.current.otherUserData?.id,
           id: createdConversation.id,
         };
-        latestRef.current.onConversationStarted?.();
+        if (startedFreshConversation(createdConversation, currentUserId)) {
+          latestRef.current.onConversationStarted?.();
+        }
         setConversationId(createdConversation.id.toString());
         setConversationData(createdConversation);
 
@@ -296,7 +304,7 @@ export function useSendMessage({
     }
 
     if (typeof input !== 'string' && currentTarget().kind === 'new') {
-      flashErrorMessage('Please send a text message before voice notes.');
+      flashErrorMessage(LanguageKeys.chatVoiceNeedsText);
       return { type: 'failed' };
     }
 
@@ -336,10 +344,14 @@ export function useSendMessage({
 
   const retryMessage = (localId: string) => {
     if (isBlockedByYou) return;
+    if (!retryGuardRef.current.tryAcquire(localId)) return;
     const bubble = latestRef.current.messages.find(
       (m) => m.local_id === localId && m.send_status === 'failed'
     );
-    if (!bubble) return;
+    if (!bubble) {
+      retryGuardRef.current.release(localId);
+      return;
+    }
 
     const outgoing: Outgoing | null =
       bubble.type === 'audio'
@@ -347,19 +359,26 @@ export function useSendMessage({
           ? { kind: 'audio', audio: bubble.pending_audio }
           : null
         : { kind: 'text', body: bubble.body };
-    if (!outgoing) return;
+    if (!outgoing) {
+      retryGuardRef.current.release(localId);
+      return;
+    }
 
     setMessages((previous) => retryPending(previous, localId));
 
     enqueue(async () => {
-      if (bubble.may_have_sent) {
-        const twin = await findAlreadyDelivered(bubble);
-        if (twin) {
-          setMessages((previous) => resolvePending(previous, localId, twin));
-          return;
+      try {
+        if (bubble.may_have_sent) {
+          const twin = await findAlreadyDelivered(bubble);
+          if (twin) {
+            setMessages((previous) => resolvePending(previous, localId, twin));
+            return;
+          }
         }
+        await deliver(localId, outgoing);
+      } finally {
+        retryGuardRef.current.release(localId);
       }
-      await deliver(localId, outgoing);
     });
   };
 

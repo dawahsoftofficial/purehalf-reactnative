@@ -112,14 +112,10 @@ const SingleChat = (props: any) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // Track messages to avoid race conditions between fetchMessages and Pusher events
   const messagesRef = useRef<ChatMessage[]>([]);
-  useEffect(() => {
-    // Every writer (optimistic bubbles, read receipts...) goes through state;
-    // keep the ref other callbacks read in step with it.
-    messagesRef.current = messages;
-  }, [messages]);
-  // True once every page of history is on screen (drives the client-side
-  // "wait for a reply" pre-check, which is only certain with the whole story).
-  const [historyComplete, setHistoryComplete] = useState(false);
+  // True when this screen created the conversation with `start` in this
+  // session (drives the client-side "wait for a reply" pre-check, which is
+  // only certain for a brand-new chat; see waitForReply.ts).
+  const [createdHere, setCreatedHere] = useState(false);
   // The server rejected a send with WAIT_FOR_REPLY; cleared as soon as a reply
   // is on screen (see isWaitingForReply) or the chat changes.
   const [serverSaysWait, setServerSaysWait] = useState(false);
@@ -147,7 +143,7 @@ const SingleChat = (props: any) => {
     onEntryChange: () => {
       messagesRef.current = [];
       setMessages([]);
-      setHistoryComplete(false);
+      setCreatedHere(false);
       setServerSaysWait(false);
     },
   });
@@ -280,7 +276,6 @@ const SingleChat = (props: any) => {
 
       // Merge into the CURRENT list (functional update) so Pusher messages and
       // unsent bubbles added meanwhile are not lost.
-      setHistoryComplete(fetchedMessages.length < MESSAGES_PAGE_SIZE);
       setMessages((previous) => {
         const merged = mergeNewestPage(previous, fetchedMessages);
         messagesRef.current = merged;
@@ -329,7 +324,6 @@ const SingleChat = (props: any) => {
 
       currentPageRef.current = nextPage;
       hasMoreMessagesRef.current = olderMessages.length >= MESSAGES_PAGE_SIZE;
-      if (!hasMoreMessagesRef.current) setHistoryComplete(true);
 
       if (olderMessages.length === 0) return;
 
@@ -1320,14 +1314,14 @@ const SingleChat = (props: any) => {
     isBlockedByYou,
     setInputMessage: setInputText,
     onWaitForReply: () => setServerSaysWait(true),
-    onConversationStarted: () => setHistoryComplete(true),
+    onConversationStarted: () => setCreatedHere(true),
   });
 
   const waitingForReply = isWaitingForReply({
     gender: currentUser?.gender,
     currentUserId: currentUser?.id,
     messages,
-    historyComplete,
+    createdHere,
     serverSaysWait,
   });
 
@@ -1343,6 +1337,8 @@ const SingleChat = (props: any) => {
   }, [messages, currentUser?.id, otherUserData?.id]);
 
   const onFailedMessagePress = (message: ChatMessage) => {
+    // Still waiting for a reply: a resend would only be rejected again.
+    if (waitingForReply && message.failure_code === 'WAIT_FOR_REPLY') return;
     if (message.local_id) retryMessage(message.local_id);
   };
 
@@ -1350,10 +1346,14 @@ const SingleChat = (props: any) => {
     const localId = message.local_id;
     if (!localId) return;
     Alert.alert(t(LanguageKeys.chatSendFailed), undefined, [
-      {
-        text: t(LanguageKeys.chatTapToRetry),
-        onPress: () => retryMessage(localId),
-      },
+      ...(waitingForReply && message.failure_code === 'WAIT_FOR_REPLY'
+        ? []
+        : [
+            {
+              text: t(LanguageKeys.chatRetry),
+              onPress: () => retryMessage(localId),
+            },
+          ]),
       {
         text: t(LanguageKeys.chatDeleteUnsent),
         style: 'destructive',
@@ -1563,10 +1563,10 @@ const SingleChat = (props: any) => {
 
   const sendVoiceRecording = async () => {
     if (isSendingVoice) return;
-    // A voice note cannot open a chat: keep the recording (and its bar) so the
-    // member can still send it once the first text message is through.
+    // A voice note cannot open a chat: drop the recording and close the bar.
     if (getSendTarget(conversationData, conversationId).kind === 'new') {
-      flashErrorMessage('Please send a text message before voice notes.');
+      await cancelVoiceRecording();
+      flashErrorMessage(LanguageKeys.chatVoiceNeedsText);
       return;
     }
     setIsSendingVoice(true);
@@ -1712,6 +1712,7 @@ const SingleChat = (props: any) => {
                       otherUserImage={otherUserData?.image}
                       isBlockedYou={isBlockedYou}
                       isLastSeenMessage={item.id === lastSeenMessageId}
+                      isWaitingForReply={waitingForReply}
                       onFailedPress={onFailedMessagePress}
                       onFailedLongPress={onFailedMessageLongPress}
                       messagePressedId={messagePressedId}

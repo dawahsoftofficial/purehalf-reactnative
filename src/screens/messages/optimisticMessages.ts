@@ -326,3 +326,23 @@ export function dropDeliveredPending(
   });
   return changed ? next : list;
 }
+
+/**
+ * Synchronous in-flight guard. React state lags a render behind a tap, so a
+ * double tap on a failed bubble would otherwise start two sends; a bubble is
+ * acquired before the request starts and released when it settles.
+ */
+export function createInFlightGuard() {
+  const active = new Set<string>();
+  return {
+    /** False when `id` is already in flight. */
+    tryAcquire(id: string): boolean {
+      if (active.has(id)) return false;
+      active.add(id);
+      return true;
+    },
+    release(id: string): void {
+      active.delete(id);
+    },
+  };
+}
