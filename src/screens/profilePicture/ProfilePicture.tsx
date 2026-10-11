@@ -303,13 +303,11 @@ function ProfilePicture(props: ProfilePictureProps) {
       return;
     }
 
-    // New user during signup - go through onboarding flow
+    // New user during signup - go through onboarding flow.
+    // Analytics params must never carry personal data (name, email, phone): Google
+    // Analytics and Meta terms forbid it. Gender alone is kept for funnel splits.
     const info = {
       gender: user?.gender || '',
-      firstName: user?.firstName || '',
-      lastName: user?.lastName || '',
-      email: user?.email || '',
-      phoneNumber: user?.phone_number || '',
     };
 
     // Facebook Event For complete Registration
