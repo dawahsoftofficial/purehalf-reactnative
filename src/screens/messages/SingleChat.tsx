@@ -358,33 +358,47 @@ const SingleChat = (props: any) => {
   // after Pusher reconnects, as an offline poll, and when a pushed message body
   // was truncated. Safe to call any time; overlapping calls collapse.
   const isCatchingUpRef = useRef<boolean>(false);
-  const refreshNewestMessages = useCallback(async () => {
-    if (!conversationId) return;
-    const conversationIdNum = parseInt(conversationId, 10);
-    if (isNaN(conversationIdNum)) return;
-    // The initial load (or a retry) is already fetching the same page.
-    if (isFetchingMessagesRef.current || isCatchingUpRef.current) return;
+  // A truncated MessageSent that arrived mid catch-up: that fetch may predate
+  // the message, so run exactly one more when it ends.
+  const catchUpQueuedRef = useRef<boolean>(false);
+  const refreshNewestMessages = useCallback(
+    async (options?: { queueIfBusy?: boolean }) => {
+      if (!conversationId) return;
+      const conversationIdNum = parseInt(conversationId, 10);
+      if (isNaN(conversationIdNum)) return;
+      if (isCatchingUpRef.current) {
+        if (options?.queueIfBusy) catchUpQueuedRef.current = true;
+        return;
+      }
+      // The initial load (or a retry) is already fetching the same page.
+      if (isFetchingMessagesRef.current) return;
 
-    isCatchingUpRef.current = true;
-    try {
-      const fetched = await messageServices.getConversationMessages(
-        conversationIdNum,
-        { per_page: MESSAGES_PAGE_SIZE, page: 1 }
-      );
-      // The screen moved to another conversation while this was in flight.
-      if (activeConversationIdRef.current !== conversationId) return;
-      setMessages((previous) => {
-        const merged = mergeNewestPage(previous, fetched);
-        messagesRef.current = merged;
-        return merged;
-      });
-    } catch (error: unknown) {
-      // Best-effort: the next trigger tries again.
-      console.error('[SingleChat.refreshNewestMessages] Error:', error);
-    } finally {
-      isCatchingUpRef.current = false;
-    }
-  }, [conversationId]);
+      isCatchingUpRef.current = true;
+      try {
+        const fetched = await messageServices.getConversationMessages(
+          conversationIdNum,
+          { per_page: MESSAGES_PAGE_SIZE, page: 1 }
+        );
+        // The screen moved to another conversation while this was in flight.
+        if (activeConversationIdRef.current !== conversationId) return;
+        setMessages((previous) => {
+          const merged = mergeNewestPage(previous, fetched);
+          messagesRef.current = merged;
+          return merged;
+        });
+      } catch (error: unknown) {
+        // Best-effort: the next trigger tries again.
+        console.error('[SingleChat.refreshNewestMessages] Error:', error);
+      } finally {
+        isCatchingUpRef.current = false;
+        if (catchUpQueuedRef.current) {
+          catchUpQueuedRef.current = false;
+          void refreshNewestMessagesRef.current();
+        }
+      }
+    },
+    [conversationId]
+  );
   const refreshNewestMessagesRef = useRef(refreshNewestMessages);
   useEffect(() => {
     refreshNewestMessagesRef.current = refreshNewestMessages;
@@ -487,7 +501,7 @@ const SingleChat = (props: any) => {
                 // The server shortened the body to fit Pusher's size limit;
                 // the list endpoint has the full text.
                 if (messageData.truncated === true) {
-                  void refreshNewestMessagesRef.current();
+                  void refreshNewestMessagesRef.current({ queueIfBusy: true });
                 }
                 break;
               }

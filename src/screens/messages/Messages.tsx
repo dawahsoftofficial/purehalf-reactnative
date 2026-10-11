@@ -53,6 +53,9 @@ type MessagesProps = {
   };
 };
 
+/** Minimum gap between foreground / reconnect inbox refetches. */
+const CATCH_UP_THROTTLE_MS = 3000;
+
 const isSupportConversation = (conversation: Conversation) =>
   conversation.type === 'support' ||
   conversation.participants?.some(
@@ -267,18 +270,27 @@ const Messages = (props: MessagesProps) => {
     };
   }, [userId, handleInboxEvent]);
 
-  // Catch up on anything missed while backgrounded or offline.
+  // Catch up on anything missed while backgrounded or offline. Coming back to
+  // the foreground and the Pusher reconnect that follows it would otherwise
+  // fetch twice, so background-triggered refetches are throttled.
   useEffect(() => {
+    let lastCatchUpAt = 0;
+    const catchUp = () => {
+      const now = Date.now();
+      if (now - lastCatchUpAt < CATCH_UP_THROTTLE_MS) return;
+      lastCatchUpAt = now;
+      void fetchConversations();
+    };
     const appStateSubscription = AppState.addEventListener(
       'change',
       (state: AppStateStatus) => {
-        if (state === 'active') void fetchConversations();
+        if (state === 'active') catchUp();
       }
     );
     const removeConnectionListener = pusherService.addConnectionListener(
       (currentState, previousState) => {
         if (currentState === 'CONNECTED' && previousState !== 'CONNECTED') {
-          void fetchConversations();
+          catchUp();
         }
       }
     );

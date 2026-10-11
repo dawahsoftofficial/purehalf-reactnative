@@ -12,6 +12,7 @@ import BaseUrl from '../api/BaseUrl';
 import type { CounterUpdateEventData } from '../api/types/message-types';
 import { resolveUnreadCounts } from '../chat/unreadCounts';
 import { StorageManager } from '../storageManager';
+import { ChannelRegistry } from './channel-registry';
 
 type PusherConfig = {
   apiKey: string;
@@ -40,15 +41,12 @@ export type PusherConnectionListener = (
 
 class PusherService {
   private pusher: Pusher | null = null;
-  /** Channels with a live native subscription. */
-  private channels: Map<string, ChannelSubscription> = new Map();
   /**
-   * Everyone who asked for a channel, whether or not the native subscription
-   * exists yet. This is what gets re-subscribed once Pusher is initialized /
-   * connected, or after a subscription error removed the channel.
+   * Requested channels (whether or not a native subscription exists yet), live
+   * channels and in-flight subscribes. Requested channels are what get
+   * (re)subscribed once Pusher is initialized / connected, or after an error.
    */
-  private desired: Map<string, Set<Subscriber>> = new Map();
-  private pendingSubscriptions: Map<string, Promise<void>> = new Map();
+  private registry = new ChannelRegistry<Subscriber, ChannelSubscription>();
   private connectionListeners: Set<PusherConnectionListener> = new Set();
   private connectionState = 'DISCONNECTED';
   private config: PusherConfig | null = null;
@@ -121,20 +119,30 @@ class PusherService {
           }
           this.isConnected = false;
         },
+        // The library only reports subscription failures here (never on the
+        // per-channel args), so this is the single error path: forget the dead
+        // channel so the next subscriber or CONNECTED subscribes afresh.
+        onSubscriptionError: (channelName: string, message: string) => {
+          this.handleSubscriptionError(channelName, message);
+        },
         onAuthorizer: async (channelName: string, socketId: string) => {
           // Custom authorizer for private channels.
-          // M3 fix: previously returned `{ auth: '' }` when authEndpoint was
-          // missing — Pusher accepted the empty auth and silently rejected the
-          // subscription with a cryptic error, making "chat is broken" very
-          // hard to diagnose. Now we throw so failures surface in Crashlytics.
+          //
+          // It must NEVER throw or hang: on Android the native side blocks on
+          // a semaphore until we hand back a result, and only the library
+          // wrapper releases it (any truthy result does). So every failure
+          // returns an empty signature, which makes the subscription fail
+          // (surfacing through onSubscriptionError, and retried later) instead
+          // of freezing the connection thread.
+          const failAuthorization = (reason: string) => {
+            console.error(`[PusherService] ${reason} (${channelName})`);
+            return { auth: '' } as { auth: string; channel_data?: string };
+          };
 
           if (!config.authEndpoint) {
-            const err = new Error(
-              '[PusherService] No authEndpoint configured — private channel subscription cannot succeed. ' +
-                'Set PUSHER_AUTH_ENDPOINT in .env.'
+            return failAuthorization(
+              'No authEndpoint configured — private channel subscription cannot succeed. Set PUSHER_AUTH_ENDPOINT in .env.'
             );
-            console.error(err.message);
-            throw err;
           }
 
           // Get user token from storage
@@ -143,11 +151,9 @@ class PusherService {
           );
 
           if (!token) {
-            const err = new Error(
-              '[PusherService] No user token — cannot authorize private channel.'
+            return failAuthorization(
+              'No user token — cannot authorize private channel.'
             );
-            console.error(err.message);
-            throw err;
           }
 
           // Determine if authEndpoint is absolute or relative URL
@@ -174,14 +180,15 @@ class PusherService {
               }
             );
 
-            // Reject if the backend didn't return an auth signature — empty
-            // strings cause Pusher to fail subscription without explanation.
+            // No signature from the backend: fail the subscription.
             if (!response?.data?.auth) {
-              const err = new Error(
-                `[PusherService] Auth response missing 'auth' field for channel ${channelName}`
+              console.error(
+                '[PusherService] Auth response missing auth field',
+                response?.data
               );
-              console.error(err.message, response?.data);
-              throw err;
+              return failAuthorization(
+                'Auth response missing the auth signature'
+              );
             }
 
             const authResponse: { auth: string; channel_data?: string } = {
@@ -204,10 +211,7 @@ class PusherService {
                 message: error?.message,
               }
             );
-            // Re-throw so subscription failure surfaces to the caller (which
-            // then logs the error and skips event handling rather than
-            // silently sitting on a dead channel).
-            throw error;
+            return failAuthorization('Auth request failed');
           }
         },
       });
@@ -240,11 +244,11 @@ class PusherService {
    * @param channelName - Channel name to unsubscribe from
    */
   unsubscribeFromChannel = async (channelName: string) => {
-    const sub = this.channels.get(channelName);
+    const sub = this.registry.getChannel(channelName);
     if (sub && this.pusher) {
       // Forget it first so a subscriber that arrives while the native
       // unsubscribe is in flight creates a fresh subscription.
-      this.channels.delete(channelName);
+      this.registry.deleteChannel(channelName);
       try {
         await this.pusher.unsubscribe({ channelName });
         console.log('[PusherService] Unsubscribed from:', channelName);
@@ -255,16 +259,24 @@ class PusherService {
   };
 
   /**
-   * Disconnect from Pusher
+   * Disconnect from Pusher. Also forgets every requested channel: after a
+   * logout nothing may re-subscribe the previous member's private channels.
    */
   disconnect = async () => {
+    // Drop the wishes first so a reconnect / re-render during the awaits
+    // below cannot resubscribe anything.
+    const liveChannels = this.registry.channelNames();
+    this.registry.reset();
     if (this.pusher) {
       try {
         // Unsubscribe from all channels
-        const unsubscribePromises = Array.from(this.channels.keys()).map(
-          (channelName) => this.unsubscribeFromChannel(channelName)
+        await Promise.all(
+          liveChannels.map((channelName) =>
+            this.pusher
+              ? this.pusher.unsubscribe({ channelName }).catch(() => {})
+              : undefined
+          )
         );
-        await Promise.all(unsubscribePromises);
 
         await this.pusher.disconnect();
         this.pusher = null;
@@ -302,7 +314,7 @@ class PusherService {
       return;
     }
 
-    const sub = this.channels.get(channelName);
+    const sub = this.registry.getChannel(channelName);
     if (!sub || !this.isReady()) {
       console.log(
         '[PusherService] Cannot trigger client event, not subscribed/ready:',
@@ -355,18 +367,32 @@ class PusherService {
 
   /** Re-attempts every requested channel that has no live subscription. */
   private resubscribeDesired = async (): Promise<void> => {
-    const names = Array.from(this.desired.keys()).filter(
-      (name) => !this.channels.has(name)
+    await Promise.all(
+      this.registry.channelsToRetry().map((name) => this.ensureSubscribed(name))
     );
-    await Promise.all(names.map((name) => this.ensureSubscribed(name)));
   };
 
   /**
-   * A subscription failed (auth error, etc.): forget the dead channel so the
-   * next subscriber, or the next CONNECTED, subscribes afresh.
+   * The one place a failed subscription is handled (init-level
+   * onSubscriptionError, and the pusher:subscription_error event): forget the
+   * dead channel so the next subscriber, or the next CONNECTED, retries.
    */
-  private dropFailedChannel = (channelName: string) => {
-    this.channels.delete(channelName);
+  private handleSubscriptionError = (channelName: string, message: string) => {
+    console.error('[PusherService] ❌ Subscription error:', {
+      channelName,
+      message,
+    });
+    if (
+      message?.includes('MethodNotAllowed') ||
+      message?.includes('POST method is not supported')
+    ) {
+      console.error(
+        '[PusherService] ⚠️ Backend Route Error: ' +
+          'The broadcasting/auth endpoint must accept POST requests. ' +
+          'Please ask your backend developer to ensure the route accepts POST method.'
+      );
+    }
+    this.registry.markFailed(channelName);
     const pusher = this.pusher;
     if (pusher) {
       pusher.unsubscribe({ channelName }).catch(() => {});
@@ -374,9 +400,7 @@ class PusherService {
   };
 
   private dispatchToSubscribers = (channelName: string, event: PusherEvent) => {
-    const subscribers = this.desired.get(channelName);
-    if (!subscribers) return;
-    Array.from(subscribers).forEach((subscriber) => {
+    this.registry.subscribers(channelName).forEach((subscriber) => {
       try {
         subscriber.onEvent?.(event);
       } catch (error) {
@@ -387,21 +411,31 @@ class PusherService {
 
   /**
    * Creates the single native subscription for a requested channel. No-op if
-   * it already exists, is in flight, nobody wants it, or Pusher is not ready.
+   * it already exists, is in flight, nobody wants it, there is no signed-in
+   * member (private channels need a token) or Pusher is not ready.
    */
   private ensureSubscribed = async (channelName: string): Promise<void> => {
-    if (this.channels.has(channelName)) return;
-    const inFlight = this.pendingSubscriptions.get(channelName);
+    // A signed-out device must not (re)subscribe anyone's private channels.
+    const token = await StorageManager.getData(
+      StorageManager.storageKeys.USER_TOKEN
+    );
+    if (!token) return;
+
+    if (this.registry.hasChannel(channelName)) return;
+    const inFlight = this.registry.getPending(channelName);
     if (inFlight) {
       await inFlight.catch(() => {});
       return;
     }
-    if (!this.desired.has(channelName) || !this.isReady() || !this.pusher) {
+    if (
+      !this.registry.isWanted(channelName) ||
+      !this.isReady() ||
+      !this.pusher
+    ) {
       return;
     }
 
     const pusher = this.pusher;
-    let failed = false;
     const subscribePromise = (async (): Promise<void> => {
       const channel = await pusher.subscribe({
         channelName,
@@ -411,68 +445,14 @@ class PusherService {
             channelName
           );
         },
-        onSubscriptionError: (name: string, message: string) => {
-          console.error('[PusherService] ❌ Subscription error:', {
-            channelName: name,
-            message,
-          });
-          if (
-            message.includes('MethodNotAllowed') ||
-            message.includes('POST method is not supported')
-          ) {
-            console.error(
-              '[PusherService] ⚠️ Backend Route Error: ' +
-                'The broadcasting/auth endpoint must accept POST requests. ' +
-                'Please ask your backend developer to ensure the route accepts POST method.'
-            );
-          }
-          failed = true;
-          this.dropFailedChannel(channelName);
-        },
         onEvent: (event: PusherEvent) => {
           if (event.eventName === 'pusher:subscription_error') {
-            console.error(
-              '[PusherService] ❌ Subscription error event received'
+            this.handleSubscriptionError(
+              channelName,
+              typeof event.data === 'string'
+                ? event.data
+                : JSON.stringify(event.data ?? '')
             );
-            try {
-              const errorData =
-                typeof event.data === 'string'
-                  ? JSON.parse(event.data)
-                  : event.data;
-              console.error(
-                '[PusherService] Subscription error details:',
-                errorData
-              );
-            } catch (e) {
-              console.error(
-                '[PusherService] Error parsing subscription error:',
-                e
-              );
-              if (
-                typeof event.data === 'string' &&
-                event.data.includes('<!DOCTYPE html>')
-              ) {
-                if (event.data.includes('MethodNotAllowedHttpException')) {
-                  console.error(
-                    '[PusherService] ⚠️ Backend Configuration Issue:\n' +
-                      'The broadcasting/auth route only accepts GET/HEAD, but Pusher requires POST.\n' +
-                      'Backend fix needed: Ensure the route accepts POST method.\n' +
-                      'In Laravel, check routes/channels.php or broadcasting.php configuration.'
-                  );
-                } else {
-                  console.error(
-                    '[PusherService] Backend returned HTML error page instead of JSON'
-                  );
-                }
-              } else {
-                console.error(
-                  '[PusherService] Error parsing subscription error:',
-                  event.data
-                );
-              }
-            }
-            failed = true;
-            this.dropFailedChannel(channelName);
             return;
           }
 
@@ -480,32 +460,30 @@ class PusherService {
             '[PusherService] 📨 Event received on',
             channelName,
             ':',
-            { eventName: event.eventName, data: event.data }
+            {
+              eventName: event.eventName,
+              data: event.data,
+            }
           );
           this.dispatchToSubscribers(channelName, event);
         },
       });
 
-      // The error callback can fire before subscribe() resolves; do not
-      // resurrect a channel that already failed.
-      if (!failed) {
-        this.channels.set(channelName, { channel });
-      }
+      // Not stored if the subscription already failed while being created.
+      this.registry.setChannel(channelName, { channel });
     })();
 
-    this.pendingSubscriptions.set(channelName, subscribePromise);
+    this.registry.beginPending(channelName, subscribePromise);
     try {
       await subscribePromise;
     } catch (error) {
       console.error('[PusherService.ensureSubscribed] Error:', error);
-      this.channels.delete(channelName);
+      this.registry.deleteChannel(channelName);
     } finally {
-      if (this.pendingSubscriptions.get(channelName) === subscribePromise) {
-        this.pendingSubscriptions.delete(channelName);
-      }
+      this.registry.endPending(channelName, subscribePromise);
     }
     // Every subscriber left while the subscription was being created.
-    if (!this.desired.has(channelName)) {
+    if (!this.registry.isWanted(channelName)) {
       void this.unsubscribeFromChannel(channelName);
     }
   };
@@ -527,22 +505,13 @@ class PusherService {
     onEvent?: (event: PusherEvent) => void
   ): Promise<() => void> => {
     const subscriber: Subscriber = { onEvent };
-    let subscribers = this.desired.get(channelName);
-    if (!subscribers) {
-      subscribers = new Set();
-      this.desired.set(channelName, subscribers);
-    }
-    subscribers.add(subscriber);
+    this.registry.addSubscriber(channelName, subscriber);
 
     let cleanedUp = false;
     const cleanup = (): void => {
       if (cleanedUp) return;
       cleanedUp = true;
-      const current = this.desired.get(channelName);
-      if (!current) return;
-      current.delete(subscriber);
-      if (current.size === 0) {
-        this.desired.delete(channelName);
+      if (this.registry.removeSubscriber(channelName, subscriber)) {
         void this.unsubscribeFromChannel(channelName);
       }
     };
