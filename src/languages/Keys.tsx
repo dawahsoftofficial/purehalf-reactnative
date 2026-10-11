@@ -707,6 +707,10 @@ const Keys = {
   chatErrorNetwork: 'chatErrorNetwork',
   chatPartnerUnavailable: 'chatPartnerUnavailable',
   chatLoadFailed: 'chatLoadFailed',
+  chatSendFailed: 'chatSendFailed',
+  chatTapToRetry: 'chatTapToRetry',
+  chatDeleteUnsent: 'chatDeleteUnsent',
+  chatWaitForReplyHint: 'chatWaitForReplyHint',
 };
 
 export default Keys;

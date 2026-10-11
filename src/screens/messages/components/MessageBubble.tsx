@@ -1,16 +1,13 @@
 import React from 'react';
-import {
-  ActivityIndicator,
-  Image,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { useTranslation } from 'react-i18next';
+import { Image, Text, TouchableOpacity, View } from 'react-native';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 
 import { hp, wp } from '../../../global';
+import { LanguageKeys } from '../../../languages';
 import { Colors } from '../../../res';
+import type { ChatMessage } from '../optimisticMessages';
 import {
-  getLastSeenMessageIndex,
   getMessageParticipantStatus,
   getMessageTime,
   getTimeAgo,
@@ -20,11 +17,12 @@ import {
 import AudioMessageBubble, {
   type AudioBubblePlayback,
 } from './AudioMessageBubble';
-import MessageStatusIcon from './MessageStatusIcon';
+import MessageStatusIcon, {
+  type MessageDisplayStatus,
+} from './MessageStatusIcon';
 
 type Props = {
   item: any;
-  index: number;
 
   currentUserId: any;
   guardianUserId: any;
@@ -34,7 +32,13 @@ type Props = {
 
   isBlockedYou: boolean;
 
-  messages: any[];
+  /** This is the message the "seen" avatar sits under (computed once by the list). */
+  isLastSeenMessage: boolean;
+
+  /** Tap on an unsent (failed) bubble: retry. */
+  onFailedPress?: (item: ChatMessage) => void;
+  /** Long-press on an unsent (failed) bubble: retry / delete menu. */
+  onFailedLongPress?: (item: ChatMessage) => void;
 
   messagePressedId: any;
   onMessagePress: (messageId: any) => void;
@@ -47,19 +51,21 @@ type Props = {
 
 const MessageBubble = ({
   item,
-  index,
   currentUserId,
   guardianUserId,
   otherUserId,
   otherUserImage,
   isBlockedYou,
-  messages,
+  isLastSeenMessage: isLastSeenMessageProp,
+  onFailedPress,
+  onFailedLongPress,
   messagePressedId,
   onMessagePress,
   getAudioPlayback,
   onToggleAudioPlayback,
   Styles,
 }: Props) => {
+  const { t }: any = useTranslation();
   // Use sender_id from API response (new structure)
   // Convert to string for comparison as currentUserId might be string
   const itemSender = item?.sender_id != null ? String(item.sender_id) : null;
@@ -74,7 +80,12 @@ const MessageBubble = ({
   // Determine message status based on delivered_at and read_at
   // Priority: read_at > delivered_at > sending
   // Note: MessageStatusIcon uses isSeen prop for read status (blue double tick)
-  const getMessageStatus = (): 'sending' | 'sent' => {
+  const getMessageStatus = (): MessageDisplayStatus => {
+    // An unsent bubble is the sender's own optimistic copy: still going out
+    // ('pending', shown as a clock) or not delivered ('failed').
+    if (item?.send_status) {
+      return item.send_status === 'failed' ? 'failed' : 'pending';
+    }
     // For messages from current user, check the other user's status
     if (isCurrentUser && otherUserStatus) {
       // If delivered or read, show as 'sent' (MessageStatusIcon will show appropriate icon based on isSeen)
@@ -85,7 +96,7 @@ const MessageBubble = ({
       return 'sending';
     }
     // For messages being sent or if status is not available
-    return item?.status === 'sending' ? 'sending' : 'sent';
+    return 'sent';
   };
 
   const messageStatus = getMessageStatus();
@@ -99,13 +110,8 @@ const MessageBubble = ({
       }
     : null;
 
-  const lastSeenMessageIndex = getLastSeenMessageIndex(
-    messages,
-    currentUserId,
-    otherUserId
-  );
-
-  const isLastSeenMessage = isCurrentUser && index === lastSeenMessageIndex;
+  const isLastSeenMessage = isCurrentUser && isLastSeenMessageProp;
+  const isFailed = item?.send_status === 'failed';
 
   const backgroundColor = isCurrentUser
     ? Colors.primary
@@ -130,7 +136,10 @@ const MessageBubble = ({
     >
       <TouchableOpacity
         style={[Styles.messageCon, tailStyle, { backgroundColor }]}
-        onPress={() => onMessagePress(item?.id)}
+        onPress={() =>
+          isFailed ? onFailedPress?.(item) : onMessagePress(item?.id)
+        }
+        onLongPress={isFailed ? () => onFailedLongPress?.(item) : undefined}
         activeOpacity={0.9}
       >
         {item?.type === 'audio' ? (
@@ -179,15 +188,23 @@ const MessageBubble = ({
         )}
       </TouchableOpacity>
 
-      {isCurrentUser && item?.status === 'sending' && (
-        <View style={Styles.messageSendingCon}>
-          <ActivityIndicator
-            color={Colors.primary}
+      {isCurrentUser && isFailed && (
+        <TouchableOpacity
+          style={Styles.messageSendingCon}
+          onPress={() => onFailedPress?.(item)}
+          onLongPress={() => onFailedLongPress?.(item)}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name="alert-circle"
             size={wp(4)}
-            style={{ marginHorizontal: wp(2) }}
+            color={Colors.color24}
+            style={{ marginHorizontal: wp(1) }}
           />
-          <Text style={Styles.sendingText}>Sending</Text>
-        </View>
+          <Text style={[Styles.sendingText, { color: Colors.color24 }]}>
+            {`${t(LanguageKeys.chatSendFailed)} · ${t(LanguageKeys.chatTapToRetry)}`}
+          </Text>
+        </TouchableOpacity>
       )}
 
       {isLastSeenMessage && otherUserImage ? (

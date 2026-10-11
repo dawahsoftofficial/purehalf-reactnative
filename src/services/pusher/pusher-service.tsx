@@ -145,10 +145,17 @@ class PusherService {
             );
           }
 
-          // Get user token from storage
-          const token = await StorageManager.getData(
-            StorageManager.storageKeys.USER_TOKEN
-          );
+          // Get user token from storage. A storage failure must not throw out
+          // of the authorizer (see the contract above).
+          let token: unknown;
+          try {
+            token = await StorageManager.getData(
+              StorageManager.storageKeys.USER_TOKEN
+            );
+          } catch (error) {
+            console.error('[PusherService] Token read failed:', error);
+            return failAuthorization('Could not read the user token');
+          }
 
           if (!token) {
             return failAuthorization(
@@ -416,9 +423,21 @@ class PusherService {
    */
   private ensureSubscribed = async (channelName: string): Promise<void> => {
     // A signed-out device must not (re)subscribe anyone's private channels.
-    const token = await StorageManager.getData(
-      StorageManager.storageKeys.USER_TOKEN
-    );
+    // Callers fire-and-forget this, so a storage failure must not become an
+    // unhandled rejection: treat it as "not signed in" (the next CONNECTED or
+    // subscriber retries).
+    let token: unknown;
+    try {
+      token = await StorageManager.getData(
+        StorageManager.storageKeys.USER_TOKEN
+      );
+    } catch (error) {
+      console.error(
+        '[PusherService.ensureSubscribed] Token read failed:',
+        error
+      );
+      return;
+    }
     if (!token) return;
 
     if (this.registry.hasChannel(channelName)) return;
@@ -436,6 +455,10 @@ class PusherService {
     }
 
     const pusher = this.pusher;
+    // disconnect() resets the registry; a subscribe still in flight across it
+    // must not store its channel (phantom "live" channel that would block a
+    // later re-subscribe).
+    const epoch = this.registry.epoch;
     const subscribePromise = (async (): Promise<void> => {
       const channel = await pusher.subscribe({
         channelName,
@@ -469,8 +492,17 @@ class PusherService {
         },
       });
 
-      // Not stored if the subscription already failed while being created.
-      this.registry.setChannel(channelName, { channel });
+      // Not stored if the subscription already failed while being created, or
+      // if a disconnect / logout reset the registry meanwhile.
+      const stored = this.registry.setChannel(channelName, { channel }, epoch);
+      if (!stored && epoch !== this.registry.epoch) {
+        // Stale (reset since this subscribe began). Drop the native channel,
+        // unless someone wants it again: the native channel is shared by name,
+        // so unsubscribing would kill the newer subscription.
+        if (!this.registry.isWanted(channelName)) {
+          pusher.unsubscribe({ channelName }).catch(() => {});
+        }
+      }
     })();
 
     this.registry.beginPending(channelName, subscribePromise);

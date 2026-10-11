@@ -14,6 +14,18 @@ export class ChannelRegistry<Subscriber, Channel> {
   private pending = new Map<string, Promise<void>>();
   /** Failed while their subscribe was still in flight. */
   private failedWhilePending = new Set<string>();
+  /**
+   * Bumped by `reset()`. A subscribe that started in an earlier epoch (before a
+   * disconnect / logout) must not store its channel afterwards: the registry
+   * was wiped, so it would be a phantom "live" channel that blocks a later
+   * re-subscribe.
+   */
+  private epochCounter = 0;
+
+  /** Current epoch; capture it before starting a native subscribe. */
+  get epoch(): number {
+    return this.epochCounter;
+  }
 
   addSubscriber(name: string, subscriber: Subscriber): void {
     let set = this.desired.get(name);
@@ -56,9 +68,12 @@ export class ChannelRegistry<Subscriber, Channel> {
 
   /**
    * Stores a live channel. Returns false (and stores nothing) if the
-   * subscription already failed while it was being created.
+   * subscription already failed while it was being created, or - when the
+   * `epoch` captured at subscribe start is passed - if the registry was reset
+   * since (the caller should then unsubscribe the native channel itself).
    */
-  setChannel(name: string, channel: Channel): boolean {
+  setChannel(name: string, channel: Channel, epoch?: number): boolean {
+    if (epoch !== undefined && epoch !== this.epochCounter) return false;
     if (this.failedWhilePending.delete(name)) return false;
     this.channels.set(name, channel);
     return true;
@@ -101,6 +116,7 @@ export class ChannelRegistry<Subscriber, Channel> {
 
   /** Forget everything (logout / disconnect). */
   reset(): void {
+    this.epochCounter += 1;
     this.desired.clear();
     this.channels.clear();
     this.pending.clear();

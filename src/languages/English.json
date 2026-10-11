@@ -713,6 +713,10 @@
     "chatErrorRateLimited": "You are sending messages too quickly. Please wait a moment.",
     "chatErrorNetwork": "Network problem. Check your connection and try again.",
     "chatPartnerUnavailable": "This member is no longer available",
-    "chatLoadFailed": "We couldn't open this chat. Please try again."
+    "chatLoadFailed": "We couldn't open this chat. Please try again.",
+    "chatSendFailed": "Message not sent",
+    "chatTapToRetry": "Tap to retry",
+    "chatDeleteUnsent": "Delete message",
+    "chatWaitForReplyHint": "Wait for a reply before sending another message"
   }
 }

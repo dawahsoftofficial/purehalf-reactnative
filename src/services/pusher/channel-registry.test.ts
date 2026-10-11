@@ -89,4 +89,38 @@ describe('ChannelRegistry', () => {
     expect(registry.getPending('d')).toBeUndefined();
     expect(registry.channelsToRetry()).toEqual([]);
   });
+  it('rejects a channel from a subscribe that started before a reset', () => {
+    const registry = make();
+    registry.addSubscriber('c', { id: '1' });
+    const epoch = registry.epoch;
+    registry.reset(); // disconnect / logout while the subscribe is in flight
+    expect(registry.setChannel('c', 'native', epoch)).toBe(false);
+    expect(registry.hasChannel('c')).toBe(false);
+  });
+
+  it('lets a later re-subscribe store its channel after a stale one was rejected', () => {
+    const registry = make();
+    const staleEpoch = registry.epoch;
+    registry.reset();
+    expect(registry.setChannel('c', 'stale', staleEpoch)).toBe(false);
+
+    registry.addSubscriber('c', { id: '2' });
+    expect(registry.channelsToRetry()).toEqual(['c']);
+    expect(registry.setChannel('c', 'fresh', registry.epoch)).toBe(true);
+    expect(registry.getChannel('c')).toBe('fresh');
+  });
+
+  it('keeps accepting channels whose epoch is current, and epochless calls', () => {
+    const registry = make();
+    expect(registry.setChannel('a', 'native', registry.epoch)).toBe(true);
+    expect(registry.setChannel('b', 'native')).toBe(true);
+  });
+
+  it('bumps the epoch on every reset', () => {
+    const registry = make();
+    const before = registry.epoch;
+    registry.reset();
+    registry.reset();
+    expect(registry.epoch).toBe(before + 2);
+  });
 });
