@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Conversation } from '../../../services/api/types/message-types';
 import {
   type ChatPartner,
+  getMyParticipant,
   getOtherParticipant,
   hasHeaderFields,
   initialOtherUser,
@@ -90,22 +91,29 @@ export function useChatResolution({
   const [isBlockedByYou, setIsBlockedByYou] = useState(false);
   const [isBlockedYou, setIsBlockedYou] = useState(false);
   const [loader, setLoader] = useState(true);
-  // False until the real conversation (or its absence) is known; sending is
-  // held until then so a first message can't race the lookup.
+  // False until the send target is known: the conversation id (seeded at once
+  // for an id entry) or the lookup's "no conversation yet". Sending is held
+  // until then so a first message can't race the lookup.
   const [resolved, setResolved] = useState(false);
+  // False until the participant lookups have finished (or were not needed);
+  // the profile fetch waits for it so it never runs for a partner whose
+  // name, image or deleted state the lookup is about to provide.
+  const [partnerSettled, setPartnerSettled] = useState(false);
   // False when a participant lookup failed, so we don't know whether the
   // partner is deleted.
   const [partnerStateKnown, setPartnerStateKnown] = useState(true);
   const [loadError, setLoadError] = useState<LoadError>(null);
   const [resolveAttempt, setResolveAttempt] = useState(0);
+  // Bumped when the screen is re-targeted at another chat, in the same state
+  // batch as the new conversation id, so "which thread is shown" changes
+  // exactly once per re-target even when the id itself does not change.
+  const [entryGeneration, setEntryGeneration] = useState(0);
   const lastEntryKeyRef = useRef<string | null>(null);
   const detailFetchedForRef = useRef<number | string | null>(null);
 
   const applyConversation = useCallback((conversation: Conversation) => {
     const me = currentUserIdRef.current;
-    const meKey = me != null ? String(me) : null;
-    const participants = conversation.participants ?? [];
-    const myParticipant = participants.find((p) => String(p.id) === meKey);
+    const myParticipant = getMyParticipant(conversation, me);
     const otherParticipant = getOtherParticipant(conversation, me);
 
     setConversationData(conversation);
@@ -138,6 +146,7 @@ export function useChatResolution({
     ) {
       // Same screen instance re-targeted at another chat (params replaced).
       onEntryChangeRef.current?.();
+      setEntryGeneration((generation) => generation + 1);
       setConversationData({});
       setConversationId('');
       setIsBlockedYou(false);
@@ -148,6 +157,7 @@ export function useChatResolution({
 
     setLoadError(null);
     setResolved(false);
+    setPartnerSettled(false);
     setPartnerStateKnown(true);
     setLoader(true);
 
@@ -168,6 +178,7 @@ export function useChatResolution({
           setLoader(false);
         }
         setResolved(true);
+        setPartnerSettled(true);
       } catch (error: unknown) {
         if (cancelled) return;
         console.error('[useChatResolution] Failed to resolve:', error);
@@ -182,6 +193,9 @@ export function useChatResolution({
       // flags, deleted partner) and are best-effort.
       setConversationData({ id: Number(id) });
       setConversationId(id);
+      // The send target is known now: the composer must not wait for up to
+      // two slow lookups that only add detail.
+      setResolved(true);
       let enriched = false;
 
       // Preferred: fetch the conversation by id. It works for an id-only
@@ -219,13 +233,14 @@ export function useChatResolution({
       // Without a user id there is no partner to look at, so nothing is
       // "unknown"; with one, a failed/mismatched lookup leaves it unknown.
       if (userId !== null && !enriched) setPartnerStateKnown(false);
-      setResolved(true);
+      setPartnerSettled(true);
     };
 
     switch (entry.kind) {
       case 'conversation':
         applyConversation(entry.conversation);
         setResolved(true);
+        setPartnerSettled(true);
         break;
       case 'conversationId':
         void resolveById(entry.conversationId, entry.userId);
@@ -254,7 +269,12 @@ export function useChatResolution({
   // a live, known member and only when the header lacks name/image.
   useEffect(() => {
     const partnerId = otherUserData?.id as number | string | undefined;
-    if (!resolved || !partnerId || isPartnerDeleted || !partnerStateKnown) {
+    if (
+      !partnerSettled ||
+      !partnerId ||
+      isPartnerDeleted ||
+      !partnerStateKnown
+    ) {
       return;
     }
     if (otherUserData?.type && otherUserData.type !== 'User') return;
@@ -279,7 +299,7 @@ export function useChatResolution({
       .catch((error: unknown) => {
         console.error('[useChatResolution] Failed to load details:', error);
       });
-  }, [resolved, otherUserData, isPartnerDeleted, partnerStateKnown]);
+  }, [partnerSettled, otherUserData, isPartnerDeleted, partnerStateKnown]);
 
   const retryResolution = useCallback(
     () => setResolveAttempt((attempt) => attempt + 1),
@@ -288,6 +308,7 @@ export function useChatResolution({
 
   return {
     entryKey,
+    entryGeneration,
     // Callers treat the partner as an untyped profile bag (route data, profile
     // fields and payload fields merged), and conversationData is sparse
     // ({id} only) until the lookup returns; both are read with optional
@@ -305,6 +326,7 @@ export function useChatResolution({
     loader,
     setLoader,
     resolved,
+    partnerSettled,
     loadError,
     setLoadError,
     isPartnerDeleted,

@@ -94,14 +94,39 @@ export function resolveChatEntry(params: RouteParams): ChatEntry {
   return { kind: 'empty' };
 }
 
-/** The participant that is not the signed-in member. */
+/**
+ * Participant ids are only unique per type (a Guardian or Admin row can share
+ * a member's numeric id), so "me" is the member row with my id. A row without
+ * a type is treated as a member (older payloads).
+ */
+const isMemberRow = (participant: Participant): boolean =>
+  !participant.type || participant.type === 'User';
+
+const isMyRow = (participant: Participant, me: string | null): boolean =>
+  me !== null && isMemberRow(participant) && String(participant.id) === me;
+
+/** The signed-in member's own participant row. */
+export function getMyParticipant(
+  conversation: Conversation | null | undefined,
+  currentUserId: string | number | null | undefined
+): Participant | undefined {
+  if (!conversation?.participants) return undefined;
+  const me = currentUserId != null ? String(currentUserId) : null;
+  return conversation.participants.find((p) => isMyRow(p, me));
+}
+
+/**
+ * The chat partner: the other member, or (support chat) the staff row. A
+ * Guardian pivot row is never the partner.
+ */
 export function getOtherParticipant(
   conversation: Conversation | null | undefined,
   currentUserId: string | number | null | undefined
 ): Participant | undefined {
   if (!conversation?.participants) return undefined;
   const me = currentUserId != null ? String(currentUserId) : null;
-  return conversation.participants.find((p) => String(p.id) !== me);
+  const others = conversation.participants.filter((p) => !isMyRow(p, me));
+  return others.find(isMemberRow) ?? others.find((p) => p.type !== 'Guardian');
 }
 
 /** True when the chat partner's account no longer exists. */
@@ -232,4 +257,18 @@ export function deliveryTarget(
   return createdId !== undefined
     ? { kind: 'existing', conversationId: createdId }
     : captured;
+}
+
+/**
+ * Identity of the thread the screen loads and subscribes to. It changes with
+ * the conversation id AND with the route entry (`entry`: a key or generation
+ * that changes on every re-target): a push for the conversation already open
+ * by user id (`u:5` -> `c:10`) clears the messages without changing the id,
+ * and the thread must still be fetched again.
+ */
+export function threadSyncKey(
+  conversationId: string,
+  entry: string | number
+): string | null {
+  return conversationId ? `${entry}|${conversationId}` : null;
 }

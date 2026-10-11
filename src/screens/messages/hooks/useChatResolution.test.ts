@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 
 import type { Conversation } from '../../../services/api/types/message-types';
-import { getSendTarget } from '../SingleChat.routing';
+import { getSendTarget, threadSyncKey } from '../SingleChat.routing';
 import {
   type ChatResolutionServices,
   useChatResolution,
@@ -81,7 +81,7 @@ describe('useChatResolution', () => {
     const services = makeServices();
     const { result } = setup({ conversationId: 12 }, services);
 
-    await waitFor(() => expect(result.current.resolved).toBe(true));
+    await waitFor(() => expect(result.current.partnerSettled).toBe(true));
 
     expect(result.current.conversationId).toBe('12');
     expect(result.current.conversationData.id).toBe(12);
@@ -107,7 +107,7 @@ describe('useChatResolution', () => {
       });
       const { result } = setup({ conversationId: 12 }, services);
 
-      await waitFor(() => expect(result.current.resolved).toBe(true));
+      await waitFor(() => expect(result.current.partnerSettled).toBe(true));
 
       expect(services.getConversation).toHaveBeenCalledWith('12');
       expect(result.current.conversationData.participants).toHaveLength(2);
@@ -131,7 +131,7 @@ describe('useChatResolution', () => {
         services
       );
 
-      await waitFor(() => expect(result.current.resolved).toBe(true));
+      await waitFor(() => expect(result.current.partnerSettled).toBe(true));
 
       expect(services.getConversationWithUser).not.toHaveBeenCalled();
       // Route data wins for a live member.
@@ -152,7 +152,7 @@ describe('useChatResolution', () => {
         services
       );
 
-      await waitFor(() => expect(result.current.resolved).toBe(true));
+      await waitFor(() => expect(result.current.partnerSettled).toBe(true));
 
       expect(services.getConversation).toHaveBeenCalledTimes(1);
       expect(services.getConversationWithUser).toHaveBeenCalledWith(5);
@@ -169,7 +169,7 @@ describe('useChatResolution', () => {
         services
       );
 
-      await waitFor(() => expect(result.current.resolved).toBe(true));
+      await waitFor(() => expect(result.current.partnerSettled).toBe(true));
 
       expect(result.current.otherUserData).toMatchObject({
         id: 5,
@@ -190,7 +190,7 @@ describe('useChatResolution', () => {
       });
       const { result } = setup({ conversationId: 12 }, services);
 
-      await waitFor(() => expect(result.current.resolved).toBe(true));
+      await waitFor(() => expect(result.current.partnerSettled).toBe(true));
 
       expect(result.current.conversationId).toBe('12');
       expect(result.current.conversationData.id).toBe(12);
@@ -218,6 +218,95 @@ describe('useChatResolution', () => {
     });
   });
 
+  it('an id entry (push) can send at once while the lookups are still running', async () => {
+    const lookup = deferred<Conversation>();
+    const services = makeServices({
+      getConversation: jest.fn().mockReturnValue(lookup.promise),
+    });
+    const { result } = setup(
+      { conversationId: 12, otherUserData: { id: 5 } },
+      services
+    );
+
+    await waitFor(() => expect(result.current.resolved).toBe(true));
+    expect(result.current.partnerSettled).toBe(false);
+    expect(
+      getSendTarget(
+        result.current.conversationData,
+        result.current.conversationId
+      )
+    ).toEqual({ kind: 'existing', conversationId: 12 });
+    // No profile visit before the lookup says who (and whether deleted).
+    expect(services.getUserDetail).not.toHaveBeenCalled();
+
+    await act(async () => {
+      lookup.resolve(conversation(12, 5));
+    });
+    expect(result.current.partnerSettled).toBe(true);
+    expect(result.current.otherUserData).toMatchObject({ name: 'User 5' });
+  });
+
+  it('a push for the chat already open by user id changes the entry but not the id', async () => {
+    const services = makeServices({
+      getConversationWithUser: jest.fn().mockResolvedValue(conversation(10, 5)),
+      getConversation: jest.fn().mockResolvedValue(conversation(10, 5)),
+    });
+    const onEntryChange = jest.fn();
+    const { result, rerender } = setup({ userId: 5 }, services, onEntryChange);
+    await waitFor(() => expect(result.current.conversationId).toBe('10'));
+    const before = threadSyncKey(
+      result.current.conversationId,
+      result.current.entryGeneration
+    );
+
+    rerender({ routeParams: { conversationId: 10 } });
+    await waitFor(() => expect(result.current.partnerSettled).toBe(true));
+
+    // Messages were cleared (onEntryChange) and conversationId ends where it
+    // started, so a thread effect keyed on the id alone would never refetch.
+    expect(onEntryChange).toHaveBeenCalledTimes(1);
+    expect(result.current.conversationId).toBe('10');
+    expect(result.current.entryKey).toBe('c:10');
+    expect(
+      threadSyncKey(
+        result.current.conversationId,
+        result.current.entryGeneration
+      )
+    ).not.toBe(before);
+  });
+
+  it('re-targeting A -> B moves the thread key straight from A to B', async () => {
+    const services = makeServices();
+    const keys: (string | null)[] = [];
+    const { rerender } = renderHook(
+      (props: { routeParams: unknown }) => {
+        const state = useChatResolution({
+          routeParams: props.routeParams,
+          currentUserId: ME,
+          services,
+        });
+        keys.push(threadSyncKey(state.conversationId, state.entryGeneration));
+        return state;
+      },
+      {
+        initialProps: {
+          routeParams: { conversationData: conversation(10, 5) },
+        },
+      }
+    );
+    await waitFor(() => expect(keys).toContain('0|10'));
+
+    rerender({ routeParams: { conversationData: conversation(20, 6) } });
+    await waitFor(() => expect(keys).toContain('1|20'));
+
+    // Never "new entry, old conversation": the thread is fetched and
+    // subscribed once per re-target, never for the chat being left.
+    const distinct = keys.filter(
+      (key, index) => key !== null && keys.indexOf(key) === index
+    );
+    expect(distinct).toEqual(['0|10', '1|20']);
+  });
+
   it('keeps the existing send path and skips getUserDetail when the participant lookup fails', async () => {
     const services = makeServices({
       getConversationWithUser: jest.fn().mockRejectedValue(new Error('boom')),
@@ -227,7 +316,7 @@ describe('useChatResolution', () => {
       services
     );
 
-    await waitFor(() => expect(result.current.resolved).toBe(true));
+    await waitFor(() => expect(result.current.partnerSettled).toBe(true));
 
     expect(result.current.conversationData.id).toBe(12);
     expect(
@@ -249,7 +338,7 @@ describe('useChatResolution', () => {
       services
     );
 
-    await waitFor(() => expect(result.current.resolved).toBe(true));
+    await waitFor(() => expect(result.current.partnerSettled).toBe(true));
 
     expect(result.current.conversationId).toBe('12');
     expect(result.current.conversationData.id).toBe(12);
@@ -266,7 +355,7 @@ describe('useChatResolution', () => {
       services
     );
 
-    await waitFor(() => expect(result.current.resolved).toBe(true));
+    await waitFor(() => expect(result.current.partnerSettled).toBe(true));
 
     expect(result.current.conversationData.participants).toHaveLength(2);
     expect(result.current.isBlockedByYou).toBe(true);
@@ -281,7 +370,7 @@ describe('useChatResolution', () => {
     const { result } = setup({ userId: 8 }, services);
     expect(result.current.loader).toBe(true);
 
-    await waitFor(() => expect(result.current.resolved).toBe(true));
+    await waitFor(() => expect(result.current.partnerSettled).toBe(true));
 
     expect(services.getConversationWithUser).toHaveBeenCalledWith(8);
     expect(result.current.loader).toBe(false);
@@ -301,7 +390,7 @@ describe('useChatResolution', () => {
     });
     const { result } = setup({ userId: 8 }, services);
 
-    await waitFor(() => expect(result.current.resolved).toBe(true));
+    await waitFor(() => expect(result.current.partnerSettled).toBe(true));
 
     expect(result.current.conversationId).toBe('7');
     expect(result.current.loader).toBe(true);
@@ -322,7 +411,7 @@ describe('useChatResolution', () => {
 
     act(() => result.current.retryResolution());
 
-    await waitFor(() => expect(result.current.resolved).toBe(true));
+    await waitFor(() => expect(result.current.partnerSettled).toBe(true));
     expect(lookup).toHaveBeenCalledTimes(2);
     expect(result.current.loadError).toBeNull();
     expect(result.current.loader).toBe(false);
@@ -347,7 +436,7 @@ describe('useChatResolution', () => {
       services
     );
 
-    await waitFor(() => expect(result.current.resolved).toBe(true));
+    await waitFor(() => expect(result.current.partnerSettled).toBe(true));
 
     expect(result.current.isPartnerDeleted).toBe(true);
     expect(result.current.otherUserData.name).toBe('Deleted member');
@@ -361,7 +450,7 @@ describe('useChatResolution', () => {
       services
     );
 
-    await waitFor(() => expect(result.current.resolved).toBe(true));
+    await waitFor(() => expect(result.current.partnerSettled).toBe(true));
     expect(services.getUserDetail).not.toHaveBeenCalled();
   });
 
@@ -407,7 +496,7 @@ describe('useChatResolution', () => {
     await act(async () => {
       second.resolve(null);
     });
-    await waitFor(() => expect(result.current.resolved).toBe(true));
+    await waitFor(() => expect(result.current.partnerSettled).toBe(true));
     expect(result.current.conversationId).toBe('');
     expect(result.current.loader).toBe(false);
     expect(result.current.otherUserData.id).toBe(9);
@@ -423,7 +512,7 @@ describe('useChatResolution', () => {
     const { result, rerender } = setup({ userId: 8 }, services);
 
     rerender({ routeParams: { userId: 9 } });
-    await waitFor(() => expect(result.current.resolved).toBe(true));
+    await waitFor(() => expect(result.current.partnerSettled).toBe(true));
 
     await act(async () => {
       first.reject(new Error('late failure'));

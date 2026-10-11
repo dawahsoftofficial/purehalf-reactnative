@@ -2,6 +2,7 @@ import type { Conversation } from '../../services/api/types/message-types';
 import {
   captureSendTarget,
   deliveryTarget,
+  getMyParticipant,
   getOtherParticipant,
   getSendTarget,
   hasHeaderFields,
@@ -9,6 +10,7 @@ import {
   isChatPartnerDeleted,
   mergeChatPartner,
   resolveChatEntry,
+  threadSyncKey,
 } from './SingleChat.routing';
 
 const conversation = (id: number, extra: Record<string, unknown> = {}) => ({
@@ -135,6 +137,54 @@ describe('getOtherParticipant', () => {
 
   it('returns undefined without a conversation', () => {
     expect(getOtherParticipant(null, 1)).toBeUndefined();
+  });
+
+  it('never picks a Guardian pivot as the partner, even listed first', () => {
+    const conv = asConversation({
+      id: 3,
+      participants: [
+        { id: 9, type: 'Guardian', name: 'Wali' },
+        { id: 1, type: 'User', name: 'Me' },
+        { id: 2, type: 'User', name: 'Aisha' },
+      ],
+    });
+    expect(getOtherParticipant(conv, 1)?.id).toBe(2);
+  });
+
+  it('does not mistake a Guardian sharing my numeric id for me', () => {
+    const conv = asConversation({
+      id: 3,
+      participants: [
+        { id: 1, type: 'Guardian', name: 'Wali' },
+        { id: 1, type: 'User', name: 'Me' },
+        { id: 2, type: 'User', name: 'Aisha' },
+      ],
+    });
+    expect(getOtherParticipant(conv, 1)).toMatchObject({ id: 2, type: 'User' });
+    expect(getMyParticipant(conv, 1)).toMatchObject({ id: 1, type: 'User' });
+  });
+
+  it('still returns a support (Admin) partner', () => {
+    const conv = asConversation({
+      id: 3,
+      type: 'support',
+      participants: [
+        { id: 1, type: 'User', name: 'Me' },
+        { id: 1, type: 'Admin', name: 'Support' },
+      ],
+    });
+    expect(getOtherParticipant(conv, 1)).toMatchObject({ type: 'Admin' });
+  });
+
+  it('returns undefined when only a Guardian is left', () => {
+    const conv = asConversation({
+      id: 3,
+      participants: [
+        { id: 1, type: 'User', name: 'Me' },
+        { id: 9, type: 'Guardian', name: 'Wali' },
+      ],
+    });
+    expect(getOtherParticipant(conv, 1)).toBeUndefined();
   });
 });
 
@@ -374,5 +424,26 @@ describe('captureSendTarget / deliveryTarget', () => {
         new Map([['5', 40]])
       )
     ).toEqual({ kind: 'existing', conversationId: 7 });
+  });
+});
+
+describe('threadSyncKey', () => {
+  it('is null without a conversation id', () => {
+    expect(threadSyncKey('', 'u:5')).toBeNull();
+  });
+
+  it('changes when a push re-targets a user entry at the same conversation', () => {
+    // Opened by user id, resolved to conversation 10; then a push for
+    // conversation 10 arrives. conversationId never changes, but the
+    // thread must be refetched (its messages were cleared).
+    expect(threadSyncKey('10', 'u:5')).not.toBe(threadSyncKey('10', 'c:10'));
+  });
+
+  it('is stable while neither the entry nor the id changes', () => {
+    expect(threadSyncKey('10', 'c:10')).toBe(threadSyncKey('10', 'c:10'));
+  });
+
+  it('changes when the first send gives a new chat its id', () => {
+    expect(threadSyncKey('', 'u:5')).not.toBe(threadSyncKey('40', 'u:5'));
   });
 });
