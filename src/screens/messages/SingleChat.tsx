@@ -43,7 +43,9 @@ import type {
   MessageSentEventData,
   ParticipantBlockedEventData,
 } from '../../services/api/types/message-types';
-import chatAudioService from '../../services/audio/chat-audio-service';
+import chatAudioService, {
+  type RecordedChatAudio,
+} from '../../services/audio/chat-audio-service';
 import {
   type CachedAudioUrl,
   isAudioUrlFresh,
@@ -85,7 +87,7 @@ type ChatAudioPlaybackState = {
 
 const MESSAGES_PAGE_SIZE = 50;
 
-/** A voice note stops (and is sent) by itself at this length. */
+/** A voice note stops by itself at this length and waits for Send / Cancel. */
 const MAX_VOICE_SECONDS = 60;
 
 /** While Pusher is not connected, poll the open thread this often. */
@@ -251,6 +253,13 @@ const SingleChat = (props: any) => {
   // Drops a recording in progress (assigned below). Used when the screen
   // loses focus, the app goes to the background or the screen unmounts.
   const abortVoiceRecordingRef = useRef<() => Promise<void>>(async () => {});
+  // At the length cap the recorder is stopped and the finished note is HELD
+  // here until the member taps Send (or Cancel / leaves, which drops it).
+  const heldRecordingRef = useRef<RecordedChatAudio | null>(null);
+  const holdPromiseRef = useRef<Promise<void> | null>(null);
+  // Bumped whenever a recording starts or is dropped, so a stop that finishes
+  // late never resurrects a cancelled note.
+  const voiceSessionRef = useRef(0);
 
   // A recording must not outlive the screen: stop the timer and the recorder.
   useEffect(() => {
@@ -1200,9 +1209,15 @@ const SingleChat = (props: any) => {
     return index >= 0 ? messages[index]?.id : null;
   }, [messages, currentUser?.id, otherUserData?.id]);
 
+  // A resend would only be rejected again: while waiting for a reply, or once
+  // either side has blocked the other.
+  const isChatBlocked = isBlockedYou || isBlockedByYou;
+  const isRetryFutile = (message: ChatMessage) =>
+    isChatBlocked ||
+    (waitingForReply && message.failure_code === 'WAIT_FOR_REPLY');
+
   const onFailedMessagePress = (message: ChatMessage) => {
-    // Still waiting for a reply: a resend would only be rejected again.
-    if (waitingForReply && message.failure_code === 'WAIT_FOR_REPLY') return;
+    if (isRetryFutile(message)) return;
     if (message.local_id) retryMessage(message.local_id);
   };
 
@@ -1210,7 +1225,7 @@ const SingleChat = (props: any) => {
     const localId = message.local_id;
     if (!localId) return;
     Alert.alert(t(LanguageKeys.chatSendFailed), undefined, [
-      ...(waitingForReply && message.failure_code === 'WAIT_FOR_REPLY'
+      ...(isRetryFutile(message)
         ? []
         : [
             {
@@ -1234,14 +1249,22 @@ const SingleChat = (props: any) => {
 
   const closeReportPicker = () => setReportTarget(null);
 
+  // Messages whose report request is still running: a quick second pick must
+  // not file the same report twice.
+  const reportingIdsRef = useRef<Set<number>>(new Set());
+
   const onReportReasonPress = async (item: { value?: string }) => {
     const target = reportTarget;
     if (!target || !item?.value || item.value === 'cancel') return;
+    if (reportingIdsRef.current.has(target.id)) return;
+    reportingIdsRef.current.add(target.id);
     try {
       await messageServices.reportMessage(target.id, { reason: item.value });
       flashSuccessMessage(LanguageKeys.chatReportSent);
     } catch (error: unknown) {
       flashErrorMessage(chatErrorMessageKey(error));
+    } finally {
+      reportingIdsRef.current.delete(target.id);
     }
   };
 
@@ -1413,6 +1436,8 @@ const SingleChat = (props: any) => {
     }
 
     try {
+      voiceSessionRef.current += 1;
+      heldRecordingRef.current = null;
       setVoiceElapsedSeconds(0);
       setVoiceWaveformPeaks([]);
       await chatAudioService.startRecording({
@@ -1433,7 +1458,7 @@ const SingleChat = (props: any) => {
         return;
       }
       setIsRecordingVoice(true);
-      // Capped here; the auto-stop effect below ends the note at the cap.
+      // Capped here; the effect below stops the recorder at the cap.
       voiceTimerRef.current = setInterval(() => {
         setVoiceElapsedSeconds((seconds) =>
           Math.min(seconds + 1, MAX_VOICE_SECONDS)
@@ -1446,6 +1471,9 @@ const SingleChat = (props: any) => {
 
   const cancelVoiceRecording = async () => {
     clearVoiceTimer();
+    // Drops a held (cap-reached) note too: the file is simply unreferenced.
+    voiceSessionRef.current += 1;
+    heldRecordingRef.current = null;
     setIsRecordingVoice(false);
     setVoiceElapsedSeconds(0);
     setVoiceWaveformPeaks((previous) => (previous.length ? [] : previous));
@@ -1467,9 +1495,19 @@ const SingleChat = (props: any) => {
     setIsSendingVoice(true);
     clearVoiceTimer();
     try {
-      const recording = await chatAudioService.stopRecording(
-        Math.max(1, voiceElapsedSeconds)
-      );
+      // The cap may have stopped the recorder already (note held) or be in the
+      // middle of stopping it: never call stopRecording a second time.
+      const pendingHold = holdPromiseRef.current;
+      if (pendingHold) await pendingHold;
+      let recording = heldRecordingRef.current;
+      if (!recording) {
+        // A stop that was in flight failed or was cancelled: nothing to send.
+        if (pendingHold) return;
+        recording = await chatAudioService.stopRecording(
+          Math.max(1, voiceElapsedSeconds)
+        );
+      }
+      heldRecordingRef.current = null;
       // The recording is handed to a bubble that keeps the file: if the upload
       // fails the member taps it to retry instead of re-recording.
       onSendPress({
@@ -1490,17 +1528,43 @@ const SingleChat = (props: any) => {
     }
   };
 
+  // At the length cap: stop the recorder and keep the finished note so the
+  // member can still review it and press Send (or Cancel). Nothing is sent
+  // without that tap; the timer stays frozen at the cap.
+  const holdVoiceRecording = () => {
+    if (holdPromiseRef.current || heldRecordingRef.current) return;
+    clearVoiceTimer();
+    const session = voiceSessionRef.current;
+    const hold = (async () => {
+      try {
+        const recording =
+          await chatAudioService.stopRecording(MAX_VOICE_SECONDS);
+        // Cancelled / left while stopping: the note is dropped.
+        if (session !== voiceSessionRef.current) return;
+        heldRecordingRef.current = recording;
+      } catch (error) {
+        console.error('[SingleChat] Error stopping recording at cap:', error);
+        if (session === voiceSessionRef.current) {
+          await cancelVoiceRecording();
+          flashErrorMessage(LanguageKeys.somethingWentWrong);
+        }
+      } finally {
+        holdPromiseRef.current = null;
+      }
+    })();
+    holdPromiseRef.current = hold;
+  };
+
   // Always the latest versions, for callers that outlive a render.
-  const sendVoiceRecordingRef = useRef(sendVoiceRecording);
+  const holdVoiceRecordingRef = useRef(holdVoiceRecording);
   useEffect(() => {
     abortVoiceRecordingRef.current = cancelVoiceRecording;
-    sendVoiceRecordingRef.current = sendVoiceRecording;
+    holdVoiceRecordingRef.current = holdVoiceRecording;
   });
 
-  // A voice note stops by itself at the length cap and is sent.
   useEffect(() => {
     if (isRecordingVoice && voiceElapsedSeconds >= MAX_VOICE_SECONDS) {
-      void sendVoiceRecordingRef.current();
+      holdVoiceRecordingRef.current();
     }
   }, [isRecordingVoice, voiceElapsedSeconds]);
 
@@ -1610,6 +1674,7 @@ const SingleChat = (props: any) => {
                       isBlockedYou={isBlockedYou}
                       isLastSeenMessage={item.id === lastSeenMessageId}
                       isWaitingForReply={waitingForReply}
+                      isChatBlocked={isBlockedYou || isBlockedByYou}
                       onFailedPress={onFailedMessagePress}
                       onFailedLongPress={onFailedMessageLongPress}
                       onReportPress={

@@ -21,10 +21,14 @@ export function hasMoreInboxPages(
   return pageLength >= perPage;
 }
 
-const timeOf = (conversation: Conversation): number => {
+/** Parsed last activity, or null when missing / not a date. */
+const parsedTime = (conversation: Conversation): number | null => {
   const time = Date.parse(conversation.last_message_at);
-  return Number.isNaN(time) ? 0 : time;
+  return Number.isNaN(time) ? null : time;
 };
+
+const timeOf = (conversation: Conversation): number =>
+  parsedTime(conversation) ?? 0;
 
 /** Most recent activity first. Always returns a new array. */
 export function sortInbox(list: Conversation[]): Conversation[] {
@@ -52,7 +56,8 @@ export function appendInboxPage(
  * - A full first page only covers the newest `perPage` conversations. Loaded
  *   entries older than its last item stay (they are on later pages); loaded
  *   entries NEWER than that boundary which the server no longer returns were
- *   deleted and are dropped.
+ *   deleted and are dropped. Items with a null/unparsable `last_message_at`
+ *   are ignored when locating that boundary.
  */
 export function mergeFirstInboxPage(
   existing: Conversation[],
@@ -62,7 +67,13 @@ export function mergeFirstInboxPage(
   if (!hasMoreInboxPages(firstPage.length, perPage)) {
     return sortInbox(firstPage);
   }
-  const boundary = Math.min(...firstPage.map(timeOf));
+  // Items without a usable timestamp say nothing about where the page ends;
+  // counting them as time 0 would make every loaded older page look "newer".
+  // With no usable timestamp at all nothing can be judged deleted.
+  const times = firstPage
+    .map(parsedTime)
+    .filter((time): time is number => time !== null);
+  const boundary = times.length > 0 ? Math.min(...times) : Infinity;
   const inFirstPage = new Set(firstPage.map((c) => c.id));
   const kept = existing.filter(
     (c) => !inFirstPage.has(c.id) && timeOf(c) < boundary

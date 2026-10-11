@@ -102,6 +102,27 @@ describe('mergeFirstInboxPage', () => {
     expect(ids(merged)).toEqual([7, 5, 4]);
   });
 
+  it('ignores a null/unparsable timestamp when locating the page boundary', () => {
+    // Without the fix the bad timestamp counted as time 0, the boundary became
+    // 0, and every loaded older page (4, 3) looked "newer" and was dropped.
+    const broken = convo(6, { last_message_at: null as unknown as string });
+    const garbage = convo(5, { last_message_at: 'not a date' });
+    const merged = mergeFirstInboxPage(
+      [convo(7), broken, garbage, convo(4), convo(3)],
+      [convo(7), broken, garbage],
+      3
+    );
+    expect(ids(merged)).toEqual(expect.arrayContaining([7, 6, 5, 4, 3]));
+    expect(merged).toHaveLength(5);
+  });
+
+  it('keeps everything when no first-page item has a usable timestamp', () => {
+    const bad = convo(9, { last_message_at: 'x' });
+    const merged = mergeFirstInboxPage([bad, convo(2), convo(1)], [bad], 1);
+    expect(ids(merged)).toEqual(expect.arrayContaining([9, 2, 1]));
+    expect(merged).toHaveLength(3);
+  });
+
   it('puts a conversation that jumped to the top first and does not duplicate it', () => {
     const merged = mergeFirstInboxPage(
       [convo(5), convo(4), convo(3)],

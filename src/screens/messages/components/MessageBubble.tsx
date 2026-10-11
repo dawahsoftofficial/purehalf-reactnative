@@ -41,6 +41,12 @@ type Props = {
    */
   isWaitingForReply?: boolean;
 
+  /**
+   * Either member has blocked the other: a failed bubble then explains that
+   * instead of offering a retry the server would refuse.
+   */
+  isChatBlocked?: boolean;
+
   /** Tap on an unsent (failed) bubble: retry. */
   onFailedPress?: (item: ChatMessage) => void;
   /** Long-press on an unsent (failed) bubble: retry / delete menu. */
@@ -69,6 +75,7 @@ const MessageBubble = ({
   isBlockedYou,
   isLastSeenMessage: isLastSeenMessageProp,
   isWaitingForReply = false,
+  isChatBlocked = false,
   onFailedPress,
   onFailedLongPress,
   onReportPress,
@@ -125,8 +132,9 @@ const MessageBubble = ({
 
   const isLastSeenMessage = isCurrentUser && isLastSeenMessageProp;
   const isFailed = item?.send_status === 'failed';
-  const failedCaption =
-    isWaitingForReply && item?.failure_code === 'WAIT_FOR_REPLY'
+  const failedCaption = isChatBlocked
+    ? t(LanguageKeys.chatErrorBlocked)
+    : isWaitingForReply && item?.failure_code === 'WAIT_FOR_REPLY'
       ? t(LanguageKeys.chatWaitForReplyHint)
       : `${t(LanguageKeys.chatSendFailed)} · ${t(LanguageKeys.chatTapToRetry)}`;
 
