@@ -703,6 +703,14 @@
     "notificationPermissionOffTitle": "نوٹیفیکیشنز بند ہیں",
     "notificationPermissionOffDescription": "نوٹیفیکیشنز بند ہونے پر آپ نئے پیغامات، میچز، تصویر کی درخواستیں اور منظوری، ممبرشپ اپ ڈیٹس اور کسٹمر سپورٹ کے جوابات سے محروم ہو سکتے ہیں۔ ابھی نوٹیفیکیشنز آن کریں یا فون کی سیٹنگز میں Pure Half کو اجازت دیں۔",
     "openSettings": "سیٹنگز کھولیں",
-    "notNow": "ابھی نہیں"
+    "notNow": "ابھی نہیں",
+    "chatErrorNoCredits": "You have no chat credits left",
+    "chatErrorBlocked": "You can't message this member.",
+    "chatErrorWaitForReply": "Wait for a reply before sending another message.",
+    "chatErrorRecipientUnavailable": "This member is no longer available.",
+    "chatErrorAccountSuspended": "Your account is suspended.",
+    "chatErrorForbidden": "You don't have access to this conversation.",
+    "chatErrorRateLimited": "You are sending messages too quickly. Please wait a moment.",
+    "chatErrorNetwork": "Network problem. Check your connection and try again."
   }
 }

@@ -697,6 +697,14 @@ const Keys = {
   microphonePermissionDenied: 'microphonePermissionDenied',
   voiceMessage: 'voiceMessage',
   recordingVoice: 'recordingVoice',
+  chatErrorNoCredits: 'chatErrorNoCredits',
+  chatErrorBlocked: 'chatErrorBlocked',
+  chatErrorWaitForReply: 'chatErrorWaitForReply',
+  chatErrorRecipientUnavailable: 'chatErrorRecipientUnavailable',
+  chatErrorAccountSuspended: 'chatErrorAccountSuspended',
+  chatErrorForbidden: 'chatErrorForbidden',
+  chatErrorRateLimited: 'chatErrorRateLimited',
+  chatErrorNetwork: 'chatErrorNetwork',
 };
 
 export default Keys;

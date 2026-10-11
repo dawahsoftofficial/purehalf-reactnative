@@ -3,7 +3,12 @@ import { useRef, useState } from 'react';
 
 import { recordSentMessage } from '@/services/rating/ratingEngagement';
 
+import { LanguageKeys } from '../../../languages';
 import { flashErrorMessage } from '../../../services';
+import {
+  type ChatErrorCode,
+  toChatApiError,
+} from '../../../services/api/chat-errors';
 import messageServices from '../../../services/api/message-services';
 import type {
   Conversation,
@@ -26,6 +31,24 @@ type UseSendMessageParams = {
   setConversationId: (id: string) => void;
   isBlockedByYou: boolean;
   setInputMessage: (message: string) => void;
+  /**
+   * Called when the server rejects a send with BLOCKED (either member blocked
+   * the other). When omitted the localized message is flashed instead.
+   */
+  onBlocked?: () => void;
+};
+
+// Localized copy per error code. Codes not listed here (VALIDATION, UNKNOWN)
+// fall back to the generic error message rather than showing raw server text.
+const CHAT_ERROR_MESSAGE_KEYS: Partial<Record<ChatErrorCode, string>> = {
+  NO_CHAT_CREDITS: LanguageKeys.chatErrorNoCredits,
+  BLOCKED: LanguageKeys.chatErrorBlocked,
+  WAIT_FOR_REPLY: LanguageKeys.chatErrorWaitForReply,
+  RECIPIENT_UNAVAILABLE: LanguageKeys.chatErrorRecipientUnavailable,
+  ACCOUNT_SUSPENDED: LanguageKeys.chatErrorAccountSuspended,
+  FORBIDDEN: LanguageKeys.chatErrorForbidden,
+  RATE_LIMITED: LanguageKeys.chatErrorRateLimited,
+  NETWORK: LanguageKeys.chatErrorNetwork,
 };
 
 type SendMessageResult =
@@ -57,12 +80,30 @@ export function useSendMessage({
   setConversationId,
   isBlockedByYou,
   setInputMessage,
+  onBlocked,
 }: UseSendMessageParams): UseSendMessageReturn {
   const [isSending, setIsSending] = useState(false);
   // Guards against a double-tap/double-Enter firing two overlapping sends
   // before the first request resolves (isSending state updates are async
   // and can't be read synchronously between the two calls).
   const isSendingRef = useRef(false);
+
+  const handleSendError = (error: unknown) => {
+    const chatError = toChatApiError(error);
+
+    if (chatError.code === 'BLOCKED' && onBlocked) {
+      onBlocked();
+      return;
+    }
+
+    flashErrorMessage(
+      CHAT_ERROR_MESSAGE_KEYS[chatError.code] ?? LanguageKeys.commonErrorMessage
+    );
+
+    if (chatError.code === 'NO_CHAT_CREDITS') {
+      void presentChatCreditsPaywall();
+    }
+  };
 
   const sendMessage = async (input: SendMessageInput): Promise<boolean> => {
     // Preserve the typed text so it can be restored if the send fails —
@@ -108,18 +149,7 @@ export function useSendMessage({
         return true;
       } catch (error: unknown) {
         restoreInputIfText();
-        const errorMessage = error as string;
-        // Check if error is about chat credits
-        if (
-          typeof errorMessage === 'string' &&
-          errorMessage.toLowerCase().includes('you have no chat credits left')
-        ) {
-          flashErrorMessage(errorMessage);
-          // Show chat credits paywall
-          presentChatCreditsPaywall();
-        } else {
-          flashErrorMessage(errorMessage);
-        }
+        handleSendError(error);
         return false;
       }
     }
@@ -169,7 +199,7 @@ export function useSendMessage({
       return true;
     } catch (error: unknown) {
       restoreInputIfText();
-      flashErrorMessage(error as string);
+      handleSendError(error);
       return false;
     }
   };

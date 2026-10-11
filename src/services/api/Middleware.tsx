@@ -9,6 +9,10 @@ import BaseUrl from './BaseUrl';
 
 const Api = axios.create({
   baseURL: BaseUrl,
+  // Without a timeout a stalled connection leaves chat sends (and the UI that
+  // awaits them) hanging forever. Rejects with no `response`, which the chat
+  // error helper maps to NETWORK.
+  timeout: 20000,
   headers: {
     'Content-Type': 'application/json',
   },
