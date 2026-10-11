@@ -14,6 +14,10 @@ import axios from 'axios';
 import Purchases from 'react-native-purchases';
 
 import { LanguageKeys } from '../../languages';
+import {
+  fcmTokenForUpload,
+  isUsableFcmToken,
+} from '../../notifications/fcmToken';
 import { isIOS } from '../CommonServices';
 import { Firebase } from '../firebase';
 import { flashErrorMessage, flashSuccessMessage } from '../FlashMessages';
@@ -96,6 +100,39 @@ class GApiServices {
       return 'FcmToken';
     }
   }
+  /**
+   * Registers this device's FCM token with the backend for the signed-in
+   * member (token rotated, or notification permission just granted).
+   * Never uploads the 'FcmToken' placeholder / an empty token, and does
+   * nothing when nobody is signed in. Best-effort: never throws.
+   * @param knownToken - A token already in hand (e.g. from onTokenRefresh)
+   * @returns Whether a token was uploaded
+   */
+  syncFcmToken = async (knownToken?: string | null): Promise<boolean> => {
+    try {
+      const sessionToken = await getData(storageKeys.USER_TOKEN);
+      if (!sessionToken) return false;
+
+      const token = isUsableFcmToken(knownToken)
+        ? knownToken
+        : await Firebase.getFcmToken();
+      if (!isUsableFcmToken(token)) return false;
+
+      await setData(storageKeys.FCM_TOKEN, token);
+      await Api.post(EndPoints.updateFcmToken, {
+        fcm_token: token,
+        device_type: !isIOS ? 0 : 1,
+      });
+      return true;
+    } catch (error) {
+      console.log(
+        '[syncFcmToken] Could not upload FCM token:',
+        error instanceof Error ? error.message : String(error)
+      );
+      return false;
+    }
+  };
+
   socialAuthenticate = (provider: string) => {
     return new Promise(async (resolve, reject) => {
       console.log(
@@ -143,7 +180,7 @@ class GApiServices {
           });
           const requestPayload = {
             firebase_id_token: firebaseIdToken,
-            fcm_token: fcmToken,
+            fcm_token: fcmTokenForUpload(fcmToken),
             device_type: !isIOS ? 0 : 1,
           };
           console.log('[socialAuthenticate] Calling API with payload:', {
@@ -313,7 +350,7 @@ class GApiServices {
 
             const requestPayload = {
               firebase_id_token: firebaseIdToken,
-              fcm_token: fcmToken,
+              fcm_token: fcmTokenForUpload(fcmToken),
               device_type: !isIOS ? 0 : 1,
             };
 
@@ -512,7 +549,7 @@ class GApiServices {
       const fcmToken = await this.getValidFcmToken();
       Api.post(EndPoints.authenticate, {
         phone_number: phoneNumber,
-        fcm_token: fcmToken,
+        fcm_token: fcmTokenForUpload(fcmToken),
         device_type: !isIOS ? 0 : 1,
       })
         .then(async (apiRes: any) => {
@@ -769,6 +806,7 @@ class GApiServices {
     return new Promise(async (resolve, reject) => {
       // const fcmToken = await getData(storageKeys.FCM_TOKEN)
       const fcmToken = await this.getValidFcmToken();
+      // Logout requires the field; the placeholder just deletes nothing.
       Api.post(EndPoints.logout, {
         fcm_token: fcmToken,
       })

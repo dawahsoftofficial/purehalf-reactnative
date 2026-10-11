@@ -11,6 +11,8 @@ import { AppRegistry } from 'react-native';
 
 import App from './App';
 import { name as appName } from './app.json';
+import { handleNotifeeEvent } from './src/notifications/pushEvents';
+import { shouldDisplayBackgroundNotification } from './src/notifications/pushPayload';
 import { Images } from './src/res';
 import { AppProvider, isIOS } from './src/services';
 
@@ -40,7 +42,18 @@ if (!isIOS) {
   createChannelId();
 }
 
+// Must be registered at module scope (not in a component) so notification
+// taps are delivered when the app was in the background or killed.
+notifee.onBackgroundEvent(handleNotifeeEvent);
+
 const onMessageReceived = async (message) => {
+  // A message with a `notification` block is already drawn by the system tray
+  // (Android shows it automatically); displaying it again would duplicate it.
+  // Only data-only messages are drawn here.
+  if (!shouldDisplayBackgroundNotification(message)) {
+    return;
+  }
+
   const { title, body, pressAction } = message.data || {};
 
   // Parse nested data field - handle double-stringified JSON

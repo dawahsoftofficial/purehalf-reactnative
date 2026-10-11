@@ -46,6 +46,8 @@ const deferred = <T>() => {
 };
 
 const makeServices = (overrides: Partial<ChatResolutionServices> = {}) => ({
+  // Default: an older backend without GET /conversations/{id}.
+  getConversation: jest.fn().mockRejectedValue(new Error('404')),
   getConversationWithUser: jest.fn().mockResolvedValue(null),
   getUserDetail: jest.fn().mockResolvedValue({}),
   ...overrides,
@@ -90,6 +92,130 @@ describe('useChatResolution', () => {
       )
     ).toEqual({ kind: 'existing', conversationId: 12 });
     expect(services.getConversationWithUser).not.toHaveBeenCalled();
+  });
+
+  describe('conversationId entry (push notification)', () => {
+    it('fills partner, block flags and deleted state from getConversation', async () => {
+      const conv = conversation(12, 5, {
+        is_blocked: 1,
+        name: 'Deleted member',
+        image: '',
+        is_deleted: true,
+      });
+      const services = makeServices({
+        getConversation: jest.fn().mockResolvedValue(conv),
+      });
+      const { result } = setup({ conversationId: 12 }, services);
+
+      await waitFor(() => expect(result.current.resolved).toBe(true));
+
+      expect(services.getConversation).toHaveBeenCalledWith('12');
+      expect(result.current.conversationData.participants).toHaveLength(2);
+      expect(result.current.isBlockedByYou).toBe(true);
+      expect(result.current.isPartnerDeleted).toBe(true);
+      expect(result.current.otherUserData).toMatchObject({
+        id: 5,
+        name: 'Deleted member',
+      });
+      // No partner id was needed, and nothing else is looked up.
+      expect(services.getConversationWithUser).not.toHaveBeenCalled();
+      expect(services.getUserDetail).not.toHaveBeenCalled();
+    });
+
+    it('prefers getConversation over the user lookup when both are possible', async () => {
+      const services = makeServices({
+        getConversation: jest.fn().mockResolvedValue(conversation(12, 5)),
+      });
+      const { result } = setup(
+        { conversationId: 12, otherUserData: { id: 5, name: 'Pushed' } },
+        services
+      );
+
+      await waitFor(() => expect(result.current.resolved).toBe(true));
+
+      expect(services.getConversationWithUser).not.toHaveBeenCalled();
+      // Route data wins for a live member.
+      expect(result.current.otherUserData.name).toBe('Pushed');
+    });
+
+    it('falls back to the push payload user and the user lookup when getConversation fails', async () => {
+      const services = makeServices({
+        getConversationWithUser: jest
+          .fn()
+          .mockResolvedValue(conversation(12, 5)),
+      });
+      const { result } = setup(
+        {
+          conversationId: 12,
+          otherUserData: { id: 5, name: 'Pushed', image: 'p.jpg' },
+        },
+        services
+      );
+
+      await waitFor(() => expect(result.current.resolved).toBe(true));
+
+      expect(services.getConversation).toHaveBeenCalledTimes(1);
+      expect(services.getConversationWithUser).toHaveBeenCalledWith(5);
+      expect(result.current.conversationId).toBe('12');
+      expect(result.current.otherUserData.name).toBe('Pushed');
+    });
+
+    it('keeps the payload partner and the existing send path when everything fails', async () => {
+      const services = makeServices({
+        getConversationWithUser: jest.fn().mockRejectedValue(new Error('x')),
+      });
+      const { result } = setup(
+        { conversationId: 12, otherUserData: { id: 5, name: 'Pushed' } },
+        services
+      );
+
+      await waitFor(() => expect(result.current.resolved).toBe(true));
+
+      expect(result.current.otherUserData).toMatchObject({
+        id: 5,
+        name: 'Pushed',
+      });
+      expect(
+        getSendTarget(
+          result.current.conversationData,
+          result.current.conversationId
+        )
+      ).toEqual({ kind: 'existing', conversationId: 12 });
+      expect(result.current.loadError).toBeNull();
+    });
+
+    it('ignores a getConversation answer for a different conversation', async () => {
+      const services = makeServices({
+        getConversation: jest.fn().mockResolvedValue(conversation(99, 5)),
+      });
+      const { result } = setup({ conversationId: 12 }, services);
+
+      await waitFor(() => expect(result.current.resolved).toBe(true));
+
+      expect(result.current.conversationId).toBe('12');
+      expect(result.current.conversationData.id).toBe(12);
+    });
+
+    it('drops a stale getConversation answer when the entry changes', async () => {
+      const first = deferred<Conversation>();
+      const services = makeServices({
+        getConversation: jest
+          .fn()
+          .mockReturnValueOnce(first.promise)
+          .mockRejectedValue(new Error('404')),
+      });
+      const { result, rerender } = setup({ conversationId: 12 }, services);
+
+      rerender({ routeParams: { conversationId: 13 } });
+      await waitFor(() => expect(result.current.conversationId).toBe('13'));
+
+      await act(async () => {
+        first.resolve(conversation(12, 5, { is_blocked: 1 }));
+      });
+
+      expect(result.current.conversationId).toBe('13');
+      expect(result.current.isBlockedByYou).toBe(false);
+    });
   });
 
   it('keeps the existing send path and skips getUserDetail when the participant lookup fails', async () => {

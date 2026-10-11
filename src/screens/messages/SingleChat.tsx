@@ -78,6 +78,8 @@ const isRateLimitError = (error: unknown): boolean => {
 };
 
 const chatResolutionServices: ChatResolutionServices = {
+  getConversation: (conversationId) =>
+    messageServices.getConversation(conversationId),
   getConversationWithUser: (userId) =>
     messageServices.getConversationWithUser(userId),
   getUserDetail: (userId) => ApiServices.getUserDetail(userId),
@@ -88,7 +90,7 @@ const SingleChat = (props: any) => {
   const flatListRef: any = useRef(null);
   const inputRef: any = useRef(null);
   const { t }: any = useTranslation();
-  const { currentUser } = useGlobalContext();
+  const { currentUser, updateOpenedConversationId } = useGlobalContext();
   const guardian = currentUser?.guardian ? currentUser?.guardian : false;
   const [messages, setMessages] = useState<Message[]>([]);
   // Track messages to avoid race conditions between fetchMessages and Pusher events
@@ -119,6 +121,16 @@ const SingleChat = (props: any) => {
       setMessages([]);
     },
   });
+  // Tell the foreground push banner which chat is on screen so a message for
+  // it doesn't pop a banner over the thread being read. Cleared on blur,
+  // unmount and when the screen is re-targeted at another conversation.
+  useFocusEffect(
+    useCallback(() => {
+      if (!conversationId) return undefined;
+      updateOpenedConversationId?.(conversationId);
+      return () => updateOpenedConversationId?.(null);
+    }, [conversationId, updateOpenedConversationId])
+  );
   // The conversation id (and entry) currently shown, so a slow fetch for a
   // previous one can be discarded.
   const activeConversationIdRef = useRef(conversationId);

@@ -25,6 +25,8 @@ import {
 } from '../SingleChat.routing';
 
 export type ChatResolutionServices = {
+  /** GET /conversations/{id}; may be missing on an older backend (rejects). */
+  getConversation: (conversationId: number | string) => Promise<Conversation>;
   getConversationWithUser: (
     userId: number | string
   ) => Promise<Conversation | null>;
@@ -150,7 +152,7 @@ export function useChatResolution({
     setLoader(true);
 
     const entry = chatEntryRef.current;
-    const { getConversationWithUser } = servicesRef.current;
+    const { getConversation, getConversationWithUser } = servicesRef.current;
 
     const resolveByUser = async (userId: number) => {
       try {
@@ -176,12 +178,28 @@ export function useChatResolution({
 
     const resolveById = async (id: string, userId: number | null) => {
       // Messages load right away, and sends take the existing-conversation
-      // path (id seeded); the lookup only enriches the participants (block
-      // flags, deleted partner) and is best-effort.
+      // path (id seeded); the lookups only enrich the participants (block
+      // flags, deleted partner) and are best-effort.
       setConversationData({ id: Number(id) });
       setConversationId(id);
       let enriched = false;
-      if (userId !== null) {
+
+      // Preferred: fetch the conversation by id. It works for an id-only
+      // entry (a push) and returns the partner, block and deleted state.
+      try {
+        const conversation = await getConversation(id);
+        if (cancelled) return;
+        if (conversation && String(conversation.id) === id) {
+          applyConversation(conversation);
+          enriched = true;
+        }
+      } catch (error: unknown) {
+        if (cancelled) return;
+        // An older backend answers 404; fall back to what the entry carried.
+        console.error('[useChatResolution] Conversation lookup failed:', error);
+      }
+
+      if (!enriched && userId !== null) {
         try {
           const conversation = await getConversationWithUser(userId);
           if (cancelled) return;

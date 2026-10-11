@@ -5,6 +5,7 @@ import type {
   Conversation,
   GetConversationMessagesParams,
   GetConversationMessagesResponse,
+  GetConversationResponse,
   GetConversationsListParams,
   GetConversationsListResponse,
   GetConversationWithUserResponse,
@@ -127,6 +128,46 @@ class MessageServices {
         .catch((error) => {
           const chatError = toChatApiError(error);
           console.error('[MessageServices.getConversationWithUser] Error:', {
+            message: chatError.message,
+            status: error?.response?.status,
+            data: error?.response?.data,
+          });
+          reject(chatError);
+        });
+    });
+  };
+
+  /**
+   * Fetches one conversation the caller participates in (participants, block
+   * flags, deleted-member state). Used to open a chat from only its id.
+   * @param conversationId - Conversation ID
+   * @returns Promise resolving to the conversation
+   */
+  getConversation = (conversationId: number | string) => {
+    return new Promise<Conversation>((resolve, reject) => {
+      Api.get(EndPoints.getConversation(conversationId))
+        .then((response) => {
+          const data = response.data as GetConversationResponse;
+
+          if (data?.error === true) {
+            reject(
+              new ChatApiError(
+                'UNKNOWN',
+                data?.message || 'Failed to fetch conversation'
+              )
+            );
+            return;
+          }
+
+          if (data?.results) {
+            resolve(data.results);
+          } else {
+            reject(new ChatApiError('UNKNOWN', 'Invalid response structure'));
+          }
+        })
+        .catch((error) => {
+          const chatError = toChatApiError(error);
+          console.error('[MessageServices.getConversation] Error:', {
             message: chatError.message,
             status: error?.response?.status,
             data: error?.response?.data,

@@ -221,4 +221,53 @@ describe('messageServices coded errors', () => {
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     });
   });
+
+  describe('getConversation', () => {
+    it('GETs the conversation by id and returns it', async () => {
+      (Api.get as jest.Mock).mockResolvedValue({
+        data: { error: false, results: { id: 9, participants: [] } },
+      });
+
+      const result = await messageServices.getConversation(9);
+
+      expect(Api.get).toHaveBeenCalledWith(EndPoints.getConversation(9));
+      expect(EndPoints.getConversation(9)).toBe('/auth/conversations/9');
+      expect(result).toMatchObject({ id: 9 });
+    });
+
+    it('rejects when the response has no conversation', async () => {
+      (Api.get as jest.Mock).mockResolvedValue({
+        data: { error: false, results: null },
+      });
+
+      await expect(messageServices.getConversation(9)).rejects.toBeInstanceOf(
+        ChatApiError
+      );
+    });
+
+    it('rejects with a coded ChatApiError for a non-participant', async () => {
+      (Api.get as jest.Mock).mockRejectedValue({
+        isAxiosError: true,
+        response: {
+          status: 403,
+          data: { error_code: 'FORBIDDEN', results: 'No' },
+        },
+      });
+
+      await expect(messageServices.getConversation(9)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+    });
+
+    it('rejects with a ChatApiError on a 404 from an older backend', async () => {
+      (Api.get as jest.Mock).mockRejectedValue({
+        isAxiosError: true,
+        response: { status: 404, data: { results: 'Not found' } },
+      });
+
+      await expect(messageServices.getConversation(9)).rejects.toBeInstanceOf(
+        ChatApiError
+      );
+    });
+  });
 });

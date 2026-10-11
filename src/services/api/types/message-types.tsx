@@ -102,6 +102,17 @@ export type GetConversationWithUserResponse = {
 };
 
 /**
+ * Get Conversation Response
+ * A single conversation the caller participates in (403 FORBIDDEN otherwise).
+ */
+export type GetConversationResponse = {
+  message: string;
+  error: boolean;
+  code: number;
+  results: Conversation;
+};
+
+/**
  * Get Conversations List Query Parameters
  */
 export type GetConversationsListParams = {

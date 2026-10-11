@@ -2,7 +2,7 @@ import { getApp } from '@react-native-firebase/app';
 import { getMessaging, onMessage } from '@react-native-firebase/messaging';
 import { useNavigation } from '@react-navigation/native';
 import { CommonActions as CommonActionsNav } from '@react-navigation/native';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
@@ -27,17 +27,40 @@ import {
   useGlobalContext,
 } from '../services';
 import { useNotificationStore } from '../stores';
+import { parsePushData, shouldSuppressChatBanner } from './pushPayload';
 import { routeNotification } from './routeNotification';
+import { usePushHandlers } from './usePushHandlers';
+
+/** How long a foreground banner stays up before hiding itself. */
+const BANNER_AUTO_HIDE_MS = 4000;
+
+/** Slides the banner off-screen, then runs the callback. */
+const slideOut = (animation: Animated.Value, callback: () => void) => {
+  Animated.timing(animation, {
+    toValue: -Dimensions.get('window').height,
+    duration: 500,
+    easing: Easing.linear,
+    useNativeDriver: true,
+  }).start(callback);
+};
 
 const firebaseApp = getApp();
 const messaging = getMessaging(firebaseApp);
 
 const DisplayForegroundNotification = () => {
-  const { getData, setData, storageKeys } = StorageManager;
-  const { currentUser, updateCurrentUser, language } = useGlobalContext();
+  const { setData, storageKeys } = StorageManager;
+  const { currentUser, updateCurrentUser, language, openedConversationId } =
+    useGlobalContext();
+  // The listener below is bound once, so read the open chat through a ref.
+  const openedConversationIdRef = useRef(openedConversationId);
+  useEffect(() => {
+    openedConversationIdRef.current = openedConversationId;
+  }, [openedConversationId]);
+  usePushHandlers();
   const navigation: any = useNavigation();
   const [remoteMessage, setRemoteMessage] = useState<any>(null);
   const [remoteMessageData, setRemoteMessageData] = useState<any>(null);
+  const [bannerImage, setBannerImage] = useState('');
   const [slideAnimation] = useState(
     new Animated.Value(Dimensions.get('window').height)
   );
@@ -54,18 +77,9 @@ const DisplayForegroundNotification = () => {
           easing: Easing.linear,
           useNativeDriver: true,
         }).start();
-      } else if (dx < 0 && Math.abs(dx) > Math.abs(dy)) {
-        // Left swipe
-        hideNotification(() => {
-          setRemoteMessage(null);
-          setRemoteMessageData(null);
-        });
-      } else if (dx > 0 && Math.abs(dx) > Math.abs(dy)) {
-        // Right swipe
-        hideNotification(() => {
-          setRemoteMessage(null);
-          setRemoteMessageData(null);
-        });
+      } else if (Math.abs(dx) > Math.abs(dy)) {
+        // Left or right swipe
+        dismissBanner();
       }
     },
   });
@@ -79,16 +93,23 @@ const DisplayForegroundNotification = () => {
     }).start();
   };
 
-  const hideNotification = (callback: () => void) => {
-    Animated.timing(slideAnimation, {
-      toValue: -Dimensions.get('window').height, // Slide down to the bottom
-      duration: 500,
-      easing: Easing.linear,
-      useNativeDriver: true,
-    }).start(callback);
+  const hideNotification = (callback: () => void) =>
+    slideOut(slideAnimation, callback);
+
+  const dismissBanner = () => {
+    hideNotification(() => {
+      setRemoteMessage(null);
+      setRemoteMessageData(null);
+      setBannerImage('');
+    });
   };
 
   const handleOnMessage = (data: any, remoteMessage: any) => {
+    // Resolved once here, not during render. Chat pushes carry the sender in
+    // `user`; other pushes nest it one level deeper in `data.data`.
+    const nested = data?.data ? parsePushData(data.data) : null;
+    const image = data?.user?.image || nested?.user?.image || '';
+    setBannerImage(typeof image === 'string' ? image : '');
     setRemoteMessageData(data);
     setRemoteMessage(remoteMessage);
     showNotification();
@@ -118,6 +139,20 @@ const DisplayForegroundNotification = () => {
     );
   };
 
+  // Auto-hide. The timer belongs to the shown message: it restarts for a new
+  // one, and is cleared on tap / swipe (the message is nulled) and unmount.
+  useEffect(() => {
+    if (!remoteMessage) return undefined;
+    const timer = setTimeout(() => {
+      slideOut(slideAnimation, () => {
+        setRemoteMessage(null);
+        setRemoteMessageData(null);
+        setBannerImage('');
+      });
+    }, BANNER_AUTO_HIDE_MS);
+    return () => clearTimeout(timer);
+  }, [remoteMessage, slideAnimation]);
+
   useEffect(() => {
     // Subscribe to foreground FCM messages. The listener needs cleaning up
     // on unmount (M4 audit finding) — otherwise the callback closes over
@@ -128,36 +163,13 @@ const DisplayForegroundNotification = () => {
       // Parse the payload exactly once. Re-parsing the already-parsed
       // object (as the old code did) throws "[object Object]" errors and
       // silently dropped most non-openChat notifications.
-      let data: any = null;
-      try {
-        const raw = remoteMessage?.data?.data;
-        if (typeof raw === 'string' && raw.length > 0) {
-          data = JSON.parse(raw);
-        } else if (raw && typeof raw === 'object') {
-          data = raw;
-        }
-      } catch (error) {
-        console.error(
-          '[DisplayForegroundNotification] Failed to parse data payload:',
-          error
-        );
-      }
+      const data: any = parsePushData(remoteMessage?.data?.data);
 
       if (pressAction === 'openChat') {
-        getData(storageKeys.OPENED_CONVERSATION_ID)
-          .then((res) => {
-            if (
-              res === data?.conversationId ||
-              (res === 'hide' && data?.conversationId)
-            ) {
-              return null;
-            } else {
-              handleOnMessage(data, remoteMessage);
-            }
-          })
-          .catch(() => {
-            handleOnMessage(data, remoteMessage);
-          });
+        // Already reading this conversation: no banner over the thread.
+        if (!shouldSuppressChatBanner(openedConversationIdRef.current, data)) {
+          handleOnMessage(data, remoteMessage);
+        }
       } else if (data?.notification_type === 'account_suspended') {
         handleOnMessage(data, remoteMessage);
         onLogoutPress();
@@ -205,10 +217,7 @@ const DisplayForegroundNotification = () => {
     const type = remoteMessageData?.notification_type;
     const data = remoteMessageData;
 
-    hideNotification(() => {
-      setRemoteMessage(null);
-      setRemoteMessageData(null);
-    });
+    dismissBanner();
 
     await routeNotification(navigation, type, {
       data,
@@ -227,17 +236,6 @@ const DisplayForegroundNotification = () => {
     });
   };
 
-  let userImage = '';
-  if (remoteMessage?.data?.pressAction === 'openChat') {
-    if (remoteMessageData?.user?.image) {
-      userImage = remoteMessageData?.user?.image;
-    }
-  } else if (remoteMessageData?.data) {
-    const userData = JSON.parse(remoteMessageData?.data);
-    if (userData?.user?.image) {
-      userImage = userData?.user?.image;
-    }
-  }
   // return null;
   return remoteMessage ? (
     <SafeAreaView style={Styles.container} {...panResponder.panHandlers}>
@@ -248,10 +246,10 @@ const DisplayForegroundNotification = () => {
             { transform: [{ translateY: slideAnimation }] },
           ]}
         >
-          {userImage ? (
+          {bannerImage ? (
             <View style={Styles.profilePictureCon}>
               <Image
-                source={{ uri: userImage }}
+                source={{ uri: bannerImage }}
                 style={Styles.image}
                 resizeMode="cover"
               />

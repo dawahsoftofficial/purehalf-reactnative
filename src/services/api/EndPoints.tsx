@@ -12,6 +12,7 @@ const EndPoints = {
   recommendedUsers: '/auth/user/exclusive?page=1&type=-1',
   getCurrentUserDetail: '/auth/my/detail',
   getAttribute: '/auth/list/attribute',
+  updateFcmToken: '/auth/fcm-token',
   logout: '/auth/logout',
   deleteMedia: '/auth/media/delete',
   moveMedia: '/auth/media/move',
@@ -47,6 +48,8 @@ const EndPoints = {
   getConversationsList: '/auth/conversations/list',
   getConversationWithUser: (userId: number | string) =>
     `/auth/conversations/with/${userId}`,
+  getConversation: (conversationId: number | string) =>
+    `/auth/conversations/${conversationId}`,
   getConversationMessages: (conversationId: number) =>
     `/auth/conversations/${conversationId}/messages`,
   sendConversationMessage: (conversationId: number) =>
