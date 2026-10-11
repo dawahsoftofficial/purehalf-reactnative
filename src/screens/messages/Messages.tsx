@@ -1,7 +1,14 @@
 import { useFocusEffect } from '@react-navigation/native';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  ActivityIndicator,
   AppState,
   type AppStateStatus,
   Dimensions,
@@ -44,6 +51,12 @@ import type {
 } from '../../services/api/types/message-types';
 import { presentChatCreditsPaywall } from '../../services/paywall-service';
 import NotificationPermissionBanner from './components/notification-permission-banner';
+import {
+  appendInboxPage,
+  hasMoreInboxPages,
+  INBOX_PAGE_SIZE,
+  mergeFirstInboxPage,
+} from './inboxPaging';
 import { isLastMessageReadByParticipant } from './SingleChat.utils';
 
 type MessagesProps = {
@@ -74,6 +87,11 @@ const Messages = (props: MessagesProps) => {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const { setData, storageKeys } = StorageManager;
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  // The list endpoint has no total: a full page means "maybe another page".
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+  const isLoadingMoreRef = useRef<boolean>(false);
+  const hasMorePagesRef = useRef<boolean>(false);
+  const nextPageRef = useRef<number>(2);
   const { currentUser, updateCurrentUser, language } = useGlobalContext();
 
   const pinnedConversations = useMemo(() => {
@@ -91,14 +109,52 @@ const Messages = (props: MessagesProps) => {
     return [...supportConversations, ...otherConversations];
   }, [conversations]);
 
+  // Loads (or refreshes) the newest page. Pages already loaded below it stay.
   const fetchConversations = useCallback(async () => {
     try {
-      const data = await messageServices.getConversationsList();
-      setConversations(data);
+      const data = await messageServices.getConversationsList({
+        page: 1,
+        per_page: INBOX_PAGE_SIZE,
+      });
+      setConversations((previous) =>
+        mergeFirstInboxPage(previous, data, INBOX_PAGE_SIZE)
+      );
+      if (!hasMoreInboxPages(data.length, INBOX_PAGE_SIZE)) {
+        // The whole inbox fits one page: nothing to page through.
+        hasMorePagesRef.current = false;
+        nextPageRef.current = 2;
+      } else if (nextPageRef.current <= 2) {
+        // Only the first page is loaded so far: more may follow.
+        hasMorePagesRef.current = true;
+      }
       setIsLoading(false);
     } catch (error: unknown) {
       console.error('[Messages.fetchConversations] Error:', error);
       setIsLoading(false);
+    }
+  }, []);
+
+  // Next older page, requested when the list is scrolled near its end.
+  const loadMoreConversations = useCallback(async () => {
+    if (!hasMorePagesRef.current || isLoadingMoreRef.current) return;
+
+    const page = nextPageRef.current;
+    isLoadingMoreRef.current = true;
+    setIsLoadingMore(true);
+    try {
+      const data = await messageServices.getConversationsList({
+        page,
+        per_page: INBOX_PAGE_SIZE,
+      });
+      setConversations((previous) => appendInboxPage(previous, data));
+      nextPageRef.current = page + 1;
+      hasMorePagesRef.current = hasMoreInboxPages(data.length, INBOX_PAGE_SIZE);
+    } catch (error: unknown) {
+      // Stays loadable: scrolling to the end again retries the same page.
+      console.error('[Messages.loadMoreConversations] Error:', error);
+    } finally {
+      isLoadingMoreRef.current = false;
+      setIsLoadingMore(false);
     }
   }, []);
 
@@ -524,10 +580,6 @@ const Messages = (props: MessagesProps) => {
 
   const keyExtractor = (item: Conversation) => item.id.toString();
 
-  const onWaliPress = () => {
-    props.navigation.navigate('AddWali', { fromSettings: true });
-  };
-
   const onFindMatchPress = () => {
     props.navigation.navigate('SearchProfiles');
     // props.navigation.navigate('SingleChat', {
@@ -559,25 +611,6 @@ const Messages = (props: MessagesProps) => {
         )}
       />
       <NotificationPermissionBanner />
-      {currentUser?.guardian ? (
-        <Ripple style={Styles.guardianTextWrapper} onPress={onWaliPress}>
-          <Ionicons
-            name="shield-checkmark"
-            size={wp(4)}
-            color={Colors.primary}
-          />
-          <Text style={Styles.guardianText}>{t('monitoredByWali')}</Text>
-        </Ripple>
-      ) : currentUser?.gender === 'female' ? (
-        <Ripple style={Styles.guardianTextWrapper} onPress={onWaliPress}>
-          <Ionicons
-            name="add-circle-outline"
-            size={wp(4)}
-            color={Colors.primary}
-          />
-          <Text style={Styles.guardianText}>{t('addAWali')}</Text>
-        </Ripple>
-      ) : null}
       <PurchaseSuccessModal
         visible={chatCreditsSuccessModalVisible}
         onCollect={onChatCreditsSuccessCollect}
@@ -603,6 +636,17 @@ const Messages = (props: MessagesProps) => {
             keyExtractor={keyExtractor}
             refreshing={isRefreshing}
             onRefresh={onRefresh}
+            onEndReached={loadMoreConversations}
+            onEndReachedThreshold={0.5}
+            ListFooterComponent={
+              isLoadingMore ? (
+                <ActivityIndicator
+                  color={Colors.primary}
+                  size={'small'}
+                  style={{ marginVertical: wp(4) }}
+                />
+              ) : null
+            }
             contentContainerStyle={
               pinnedConversations.length ? undefined : Styles.emptyListContent
             }
@@ -708,7 +752,7 @@ const Styles = StyleSheet.create({
     fontSize: Typography.tiny2,
     includeFontPadding: false,
   },
-  // header right + guardian menu
+  // header right
   headerRightContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -733,23 +777,6 @@ const Styles = StyleSheet.create({
   },
   destructiveOption: {
     backgroundColor: Colors.surface,
-  },
-  // guardian banner
-  guardianTextWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.lavender,
-    paddingVertical: hp(0.9),
-    paddingHorizontal: wp(4),
-  },
-  guardianText: {
-    fontSize: Typography.small,
-    fontFamily: Fonts.APPFONT_M,
-    color: Colors.primary,
-    alignSelf: 'center',
-    marginHorizontal: wp(2),
-    includeFontPadding: false,
   },
   // empty state
   textContainer: {

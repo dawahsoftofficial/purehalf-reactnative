@@ -40,8 +40,12 @@ describe('startedFreshConversation', () => {
     last_read_message_id: lastRead,
     unread_count: 0,
   });
+  const conversationOf = (
+    participants: ReturnType<typeof participant>[],
+    extra: { created?: boolean } = {}
+  ) => ({ id: 1, participants, ...extra }) as never;
   const conversation = (...participants: ReturnType<typeof participant>[]) =>
-    ({ id: 1, participants }) as never;
+    conversationOf(participants);
 
   it('is true when the partner has not read anything yet', () => {
     expect(
@@ -63,6 +67,53 @@ describe('startedFreshConversation', () => {
 
   it('is false without participants', () => {
     expect(startedFreshConversation({ id: 1 } as never, ME)).toBe(false);
+  });
+
+  describe('with the server `created` flag', () => {
+    it('trusts created: true even when a participant has a read marker', () => {
+      expect(
+        startedFreshConversation(
+          conversationOf([participant(ME, null), participant(9, 40)], {
+            created: true,
+          }),
+          ME
+        )
+      ).toBe(true);
+    });
+
+    it('trusts created: false even when nobody has read anything yet', () => {
+      expect(
+        startedFreshConversation(
+          conversationOf([participant(ME, null), participant(9, null)], {
+            created: false,
+          }),
+          ME
+        )
+      ).toBe(false);
+    });
+
+    it('trusts created without needing participants', () => {
+      expect(
+        startedFreshConversation({ id: 1, created: true } as never, ME)
+      ).toBe(true);
+    });
+
+    it('falls back to the read-marker heuristic when the field is absent', () => {
+      expect(
+        startedFreshConversation(
+          conversation(participant(ME, null), participant(9, null)),
+          ME
+        )
+      ).toBe(true);
+      expect(
+        startedFreshConversation(
+          conversationOf([participant(ME, null), participant(9, 40)], {
+            created: undefined,
+          }),
+          ME
+        )
+      ).toBe(false);
+    });
   });
 });
 

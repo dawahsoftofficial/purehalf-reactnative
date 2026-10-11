@@ -25,7 +25,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import pusherService from '@/services/pusher';
 import { evaluateAndMaybeShowRatingPrompt } from '@/services/rating/ratingEngagement';
 
-import { Container } from '../../components';
+import { ButtonPicker, Container } from '../../components';
 import { wp } from '../../global';
 import { CheckRtl, LanguageKeys } from '../../languages';
 import { Colors } from '../../res';
@@ -44,6 +44,11 @@ import type {
   ParticipantBlockedEventData,
 } from '../../services/api/types/message-types';
 import chatAudioService from '../../services/audio/chat-audio-service';
+import {
+  type CachedAudioUrl,
+  isAudioUrlFresh,
+  toCachedAudioUrl,
+} from './audioUrlCache';
 import { chatErrorMessageKey } from './chat-error-messages';
 import type { AudioBubblePlayback } from './components/AudioMessageBubble';
 import IcebreakerChips from './components/IcebreakerChips';
@@ -63,7 +68,9 @@ import {
   type ChatMessage,
   sortMessages,
 } from './optimisticMessages';
-import { getSendTarget } from './SingleChat.routing';
+import { applyReadUpTo } from './readReceipts';
+import { canReportMessage, REPORT_REASONS } from './reportMessage';
+import { getOtherParticipant, getSendTarget } from './SingleChat.routing';
 import Styles from './SingleChat.styles';
 import { getLastSeenMessageIndex } from './SingleChat.utils';
 import SingleChatHeader from './SingleChatHeader';
@@ -77,6 +84,9 @@ type ChatAudioPlaybackState = {
 };
 
 const MESSAGES_PAGE_SIZE = 50;
+
+/** A voice note stops (and is sent) by itself at this length. */
+const MAX_VOICE_SECONDS = 60;
 
 /** While Pusher is not connected, poll the open thread this often. */
 const OFFLINE_POLL_INTERVAL_MS = 15000;
@@ -108,7 +118,6 @@ const SingleChat = (props: any) => {
   const inputRef: any = useRef(null);
   const { t }: any = useTranslation();
   const { currentUser, updateOpenedConversationId } = useGlobalContext();
-  const guardian = currentUser?.guardian ? currentUser?.guardian : false;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // Track messages to avoid race conditions between fetchMessages and Pusher events
   const messagesRef = useRef<ChatMessage[]>([]);
@@ -126,7 +135,7 @@ const SingleChat = (props: any) => {
     conversationId,
     setConversationId,
     isBlockedByYou,
-    setIsBlockedByYou: _setIsBlockedByYou,
+    setIsBlockedByYou,
     isBlockedYou,
     setIsBlockedYou,
     loader,
@@ -150,11 +159,22 @@ const SingleChat = (props: any) => {
   // Tell the foreground push banner which chat is on screen so a message for
   // it doesn't pop a banner over the thread being read. Cleared on blur,
   // unmount and when the screen is re-targeted at another conversation.
+  // The same effect records whether the thread is on screen: a message that
+  // arrives while the member is elsewhere must not be reported as read.
+  const isScreenFocusedRef = useRef(false);
   useFocusEffect(
     useCallback(() => {
-      if (!conversationId) return undefined;
+      isScreenFocusedRef.current = true;
+      if (!conversationId) {
+        return () => {
+          isScreenFocusedRef.current = false;
+        };
+      }
       updateOpenedConversationId?.(conversationId);
-      return () => updateOpenedConversationId?.(null);
+      return () => {
+        isScreenFocusedRef.current = false;
+        updateOpenedConversationId?.(null);
+      };
     }, [conversationId, updateOpenedConversationId])
   );
   // The conversation id (and entry) currently shown, so a slow fetch for a
@@ -181,15 +201,11 @@ const SingleChat = (props: any) => {
   // Bumped on every (re)subscribe and on teardown; see setupPusherListeners.
   const subscribeGenerationRef = useRef(0);
   const lastTypingEventRef = useRef<number>(0);
-  // Track which messages have been marked as read to avoid duplicate API calls
+  // Messages already reported as read (or being reported), so no id is sent
+  // twice. mark-all-read fires only when an id NOT in this set shows up, so a
+  // stream of incoming messages never re-triggers a whole-conversation call.
+  // The server also stamps delivered_at on everything it marks read.
   const markedAsReadRef = useRef<Set<number>>(new Set());
-  // Track which messages have been marked as delivered to avoid duplicate API calls
-  const markedAsDeliveredRef = useRef<Set<number>>(new Set());
-  // Bulk mark-all-read should fire once per focus session, not on every
-  // messages-array change — otherwise every single incoming message while
-  // the screen stays focused re-triggers a "mark whole conversation read"
-  // round-trip (this was already tripping the 429 handling below).
-  const hasMarkedAllOnFocusRef = useRef<boolean>(false);
   const isFetchingMessagesRef = useRef<boolean>(false);
   // Older-message pagination: history was previously capped at whatever the
   // first fetch returned (50 messages) with no way to load anything before that.
@@ -198,7 +214,7 @@ const SingleChat = (props: any) => {
   const hasMoreMessagesRef = useRef<boolean>(true);
   const currentPageRef = useRef<number>(1);
   const audioPlaybackRef = useRef<ChatAudioPlaybackState>(audioPlayback);
-  const audioSourceCacheRef = useRef<Map<number, string>>(new Map());
+  const audioSourceCacheRef = useRef<Map<number, CachedAudioUrl>>(new Map());
 
   const [inputMessage, setInputMessage] = useState('');
   // Mirrors the composer text synchronously so a double tap on send cannot
@@ -232,14 +248,14 @@ const SingleChat = (props: any) => {
   const [voiceWaveformPeaks, setVoiceWaveformPeaks] = useState<number[]>([]);
   const [isSendingVoice, setIsSendingVoice] = useState(false);
   const voiceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Drops a recording in progress (assigned below). Used when the screen
+  // loses focus, the app goes to the background or the screen unmounts.
+  const abortVoiceRecordingRef = useRef<() => Promise<void>>(async () => {});
 
-  // Clear the voice-recording interval if the screen unmounts mid-recording.
+  // A recording must not outlive the screen: stop the timer and the recorder.
   useEffect(() => {
     return () => {
-      if (voiceTimerRef.current) {
-        clearInterval(voiceTimerRef.current);
-        voiceTimerRef.current = null;
-      }
+      void abortVoiceRecordingRef.current();
     };
   }, []);
 
@@ -284,10 +300,9 @@ const SingleChat = (props: any) => {
       setLoader(false);
       isFetchingMessagesRef.current = false;
 
-      // Reset the marked as read/delivered tracking when messages are fetched
-      // This ensures we can mark messages as read/delivered when screen is focused
+      // Reset the read tracking when messages are fetched so unread ones are
+      // reported again when the screen is focused.
       markedAsReadRef.current.clear();
-      markedAsDeliveredRef.current.clear();
     } catch (error: unknown) {
       console.error('[SingleChat.fetchMessages] Error:', error);
       if (activeConversationIdRef.current !== conversationId) return;
@@ -567,50 +582,10 @@ const SingleChat = (props: any) => {
       }
       unsubscribeConversationRef.current = unsubscribe;
       console.log('[SingleChat] ✅ Subscribed to conversation channel');
-
-      // Mark all messages as read after subscription if there are unread messages
-      const currentUserId = currentUser?.id;
-      const currentUserIdStr =
-        currentUserId != null ? String(currentUserId) : null;
-
-      if (currentUserIdStr && conversationData?.participants) {
-        const currentUserParticipant = conversationData.participants.find(
-          (p: any) => String(p.id) === currentUserIdStr
-        );
-        // Focus handling batches existing unread messages; avoid a second
-        // mark-all-read request during subscription setup.
-        const unReadCount = Math.min(
-          0,
-          currentUserParticipant?.unread_count || 0
-        );
-
-        if (unReadCount > 0) {
-          console.log(
-            '[SingleChat] Marking all messages as read for conversation:',
-            conversationId,
-            'unread_count:',
-            unReadCount
-          );
-          messageServices
-            .markAllMessagesAsRead(parseInt(conversationId, 10))
-            .then(() => {
-              console.log(
-                '[SingleChat] ✅ All messages marked as read for conversation:',
-                conversationId
-              );
-            })
-            .catch((error) => {
-              console.error(
-                '[SingleChat] Error marking all messages as read:',
-                error
-              );
-            });
-        }
-      }
     } catch (error) {
       console.error('[SingleChat] Error setting up Pusher:', error);
     }
-  }, [conversationId, conversationData, currentUser]);
+  }, [conversationId]);
 
   // Handle new message from Pusher
   // Note: messageData is the nested message object from MessageSentEventData
@@ -648,56 +623,24 @@ const SingleChat = (props: any) => {
         return next;
       });
 
-      // Mark this specific message as read immediately since user is viewing the chat
-      // When User B receives a message from User A while viewing the chat, mark it as read instantly
-      if (message.id && !markedAsReadRef.current.has(message.id)) {
-        // Add to tracking set immediately to prevent duplicate calls
+      // The member is looking at this thread: report the message as read with
+      // one single-message call. Off screen or in the background it is left
+      // unread, and the focus / foreground handling picks it up later.
+      if (
+        message.id > 0 &&
+        isScreenFocusedRef.current &&
+        AppState.currentState === 'active' &&
+        !markedAsReadRef.current.has(message.id)
+      ) {
         markedAsReadRef.current.add(message.id);
 
-        // Call API to mark message as read
-        messageServices
-          .markMessageAsRead(message.id)
-          .then(() => {
-            console.log(
-              '[SingleChat] ✅ Message marked as read (received while viewing):',
-              message.id
-            );
-          })
-          .catch((error) => {
-            console.error(
-              '[SingleChat] ❌ Error marking message as read:',
-              error
-            );
-            if (!isRateLimitError(error)) {
-              // Remove from set on non-throttle errors so we can retry later.
-              markedAsReadRef.current.delete(message.id);
-            }
-          });
-      }
-
-      // Mark message as delivered
-      if (message.id && !markedAsDeliveredRef.current.has(message.id)) {
-        // Add to tracking set immediately to prevent duplicate calls
-        markedAsDeliveredRef.current.add(message.id);
-
-        messageServices
-          .markMessageDelivered(message.id)
-          .then(() => {
-            console.log(
-              '[SingleChat] ✅ Message marked as delivered (received while viewing):',
-              message.id
-            );
-          })
-          .catch((error) => {
-            console.error(
-              '[SingleChat] ❌ Error marking message as delivered:',
-              error
-            );
-            if (!isRateLimitError(error)) {
-              // Remove from set on non-throttle errors so we can retry later.
-              markedAsDeliveredRef.current.delete(message.id);
-            }
-          });
+        messageServices.markMessageAsRead(message.id).catch((error) => {
+          console.error('[SingleChat] Error marking message as read:', error);
+          if (!isRateLimitError(error)) {
+            // Allow a later retry (not on throttle errors).
+            markedAsReadRef.current.delete(message.id);
+          }
+        });
       }
 
       // Clear typing indicator when message is received
@@ -709,53 +652,28 @@ const SingleChat = (props: any) => {
     [currentUser, conversationId]
   );
 
-  // Handle message read status update
+  // Handle message read status update. The event names the highest message
+  // the reader has read, which covers every older message of this thread too.
   const handleMessageRead = useCallback((data: MessageReadEventData) => {
     console.log('[SingleChat] Updating message read status:', data);
 
     const readerId = data.read_by?.id;
-    const readAt = data.read_at || new Date().toISOString();
-
     if (!readerId) {
       console.error('[SingleChat] MessageRead event missing read_by.id');
       return;
     }
 
-    setMessages((prevMessages) =>
-      prevMessages.map((msg) => {
-        if (msg.id === data.message_id) {
-          // Find existing status for this reader or create new one
-          const existingStatusIndex = msg.statuses?.findIndex(
-            (status) => status.participant_id === readerId
-          );
-
-          const updatedStatuses =
-            existingStatusIndex !== undefined && existingStatusIndex >= 0
-              ? // Update existing status
-                msg.statuses?.map((status, index) =>
-                  index === existingStatusIndex
-                    ? { ...status, read_at: readAt }
-                    : status
-                ) || []
-              : // Create new status entry for this reader
-                [
-                  ...(msg.statuses || []),
-                  {
-                    participant_type: data.read_by?.type || 'User',
-                    participant_id: readerId,
-                    delivered_at: null,
-                    read_at: readAt,
-                  },
-                ];
-
-          return {
-            ...msg,
-            statuses: updatedStatuses,
-          };
-        }
-        return msg;
-      })
-    );
+    const readAt = data.read_at || new Date().toISOString();
+    setMessages((prevMessages) => {
+      const next = applyReadUpTo(prevMessages, {
+        messageId: data.message_id,
+        readerId,
+        readerType: data.read_by?.type,
+        readAt,
+      });
+      if (next !== prevMessages) messagesRef.current = next;
+      return next;
+    });
   }, []);
 
   // Handle message delivered status update
@@ -832,7 +750,7 @@ const SingleChat = (props: any) => {
         }
       } else if (data.blocked_by_id === currentUserId) {
         // Fallback if the actor ever receives the event (self-view sync).
-        _setIsBlockedByYou(data.is_blocked);
+        setIsBlockedByYou(data.is_blocked);
       }
     },
     [currentUser]
@@ -941,40 +859,26 @@ const SingleChat = (props: any) => {
     }
   }, []);
 
-  const getPreparedAudioSource = useCallback(async (message: any) => {
-    if (message.local_uri) return message.local_uri;
+  // Playback source for a voice note. A cached URL is reused only while it
+  // has not (nearly) expired; `refresh` skips the cache and a local recording
+  // (used to recover from a playback error).
+  const getPreparedAudioSource = useCallback(
+    async (message: any, refresh = false): Promise<string> => {
+      if (message.local_uri && !refresh) return message.local_uri;
 
-    const cachedSource = audioSourceCacheRef.current.get(message.id);
-    if (cachedSource) return cachedSource;
+      const cached = audioSourceCacheRef.current.get(message.id);
+      if (!refresh && isAudioUrlFresh(cached)) return cached.url;
 
-    const sourceUrl = (await messageServices.getMessageAudioUrl(message.id))
-      .url;
-    audioSourceCacheRef.current.set(message.id, sourceUrl);
-    return sourceUrl;
-  }, []);
-
-  const prepareAudioMessageSource = useCallback(
-    async (message: any): Promise<void> => {
-      if (!message?.id) return;
-
-      const fallbackDurationMillis = getAudioDurationMillis(message);
-      setAudioPlayback({
-        messageId: message.id,
-        status: 'loading',
-        positionMillis: 0,
-        durationMillis: fallbackDurationMillis,
-      });
-
-      try {
-        await getPreparedAudioSource(message);
-      } catch (error) {
-        console.error('[SingleChat] Error preparing audio:', error);
-        flashErrorMessage('Unable to load this voice message.');
-      } finally {
-        resetAudioPlayback();
-      }
+      const { url, expires_at } = await messageServices.getMessageAudioUrl(
+        message.id
+      );
+      audioSourceCacheRef.current.set(
+        message.id,
+        toCachedAudioUrl(url, expires_at)
+      );
+      return url;
     },
-    [getAudioDurationMillis, getPreparedAudioSource, resetAudioPlayback]
+    []
   );
 
   const playAudioMessage = useCallback(
@@ -998,8 +902,8 @@ const SingleChat = (props: any) => {
         durationMillis: fallbackDurationMillis,
       });
 
-      try {
-        const sourceUrl = await getPreparedAudioSource(message);
+      const startPlayback = async (refresh: boolean) => {
+        const sourceUrl = await getPreparedAudioSource(message, refresh);
 
         await chatAudioService.play(sourceUrl, {
           onProgress: ({ currentPosition, duration }) => {
@@ -1023,6 +927,20 @@ const SingleChat = (props: any) => {
             resetAudioPlayback();
           },
         });
+      };
+
+      try {
+        try {
+          await startPlayback(false);
+        } catch (firstError) {
+          // The signed URL may have expired (or the local file is gone): ask
+          // the server for a fresh one and try once more.
+          console.warn(
+            '[SingleChat] Playback failed, refetching URL:',
+            firstError
+          );
+          await startPlayback(true);
+        }
 
         setAudioPlayback((previous) =>
           previous.messageId === message.id
@@ -1047,6 +965,8 @@ const SingleChat = (props: any) => {
     (message: any) => {
       const currentPlayback = audioPlaybackRef.current;
       if (currentPlayback.messageId === message?.id) {
+        // The first tap is still fetching the URL / starting the player.
+        if (currentPlayback.status === 'loading') return;
         if (currentPlayback.status === 'playing') {
           void pauseAudioPlayback();
           return;
@@ -1057,22 +977,10 @@ const SingleChat = (props: any) => {
         }
       }
 
-      if (
-        !message?.local_uri &&
-        !audioSourceCacheRef.current.has(message?.id)
-      ) {
-        void prepareAudioMessageSource(message);
-        return;
-      }
-
+      // One tap fetches the URL (when needed) and plays.
       void playAudioMessage(message);
     },
-    [
-      pauseAudioPlayback,
-      playAudioMessage,
-      prepareAudioMessageSource,
-      resumeAudioPlayback,
-    ]
+    [pauseAudioPlayback, playAudioMessage, resumeAudioPlayback]
   );
 
   useEffect(() => {
@@ -1081,6 +989,11 @@ const SingleChat = (props: any) => {
       (nextState: AppStateStatus) => {
         if (nextState !== 'active') {
           void pauseAudioPlayback();
+        }
+        // 'background' only: iOS reports 'inactive' while the microphone
+        // permission prompt is up, which must not cancel the recording.
+        if (nextState === 'background') {
+          void abortVoiceRecordingRef.current();
         }
       }
     );
@@ -1163,144 +1076,94 @@ const SingleChat = (props: any) => {
     }, [conversationId])
   );
 
-  // Mark all unread messages as read individually when screen is focused
-  useFocusEffect(
-    useCallback(() => {
-      if (!conversationId || messages.length === 0) return;
-
+  // Reports unread messages from the other side with ONE mark-all-read call
+  // (the server also stamps them delivered). Runs on focus, when the list
+  // gains a message that was not reported yet (e.g. a catch-up fetch) and when
+  // the app returns to the foreground; ids already reported are skipped, so
+  // each new message costs at most one call.
+  const markUnreadMessagesRead = useCallback(
+    (list: ChatMessage[]) => {
       const currentUserId = currentUser?.id;
+      if (!conversationId || !currentUserId) return;
+      if (AppState.currentState !== 'active') return;
 
-      if (!currentUserId) return;
-
-      const unreadMessages = messages.filter((message) => {
-        if (
-          message.sender_id === currentUserId ||
-          !message.id ||
-          message.id < 0
-        ) {
-          return false;
-        }
-        if (markedAsReadRef.current.has(message.id)) return false;
-
-        return !message.statuses?.some(
-          (status) =>
-            status.participant_id === currentUserId && status.read_at !== null
-        );
-      });
-
-      if (unreadMessages.length > 0 && !hasMarkedAllOnFocusRef.current) {
-        hasMarkedAllOnFocusRef.current = true;
-        unreadMessages.forEach((message) =>
-          markedAsReadRef.current.add(message.id)
-        );
-
-        messageServices
-          .markAllMessagesAsRead(parseInt(conversationId, 10))
-          .then(() => {
-            console.log(
-              '[SingleChat] Marked unread messages as read on focus:',
-              unreadMessages.length
-            );
-          })
-          .catch((error) => {
-            console.error(
-              '[SingleChat] Error marking all messages as read on focus:',
-              error
-            );
-
-            if (!isRateLimitError(error)) {
-              unreadMessages.forEach((message) =>
-                markedAsReadRef.current.delete(message.id)
-              );
-              hasMarkedAllOnFocusRef.current = false;
-            }
-          });
-      }
-
-      // Mark each unread message from other users as read and delivered individually
-      messages.forEach((message) => {
-        // Only mark messages from other users
-        if (message.sender_id !== currentUserId && message.id > 0) {
-          // Mark as read if not already read
-          if (!markedAsReadRef.current.has(message.id)) {
-            // Check if message is already read by checking statuses
-            const isAlreadyRead = message.statuses?.some(
+      const unreadIds = list
+        .filter(
+          (message) =>
+            message.id > 0 &&
+            message.send_status === undefined &&
+            message.sender_id !== currentUserId &&
+            !markedAsReadRef.current.has(message.id) &&
+            !message.statuses?.some(
               (status) =>
                 status.participant_id === currentUserId &&
                 status.read_at !== null
-            );
+            )
+        )
+        .map((message) => message.id);
+      if (unreadIds.length === 0) return;
 
-            if (!isAlreadyRead) {
-              markedAsReadRef.current.add(message.id);
-              messageServices
-                .markMessageAsRead(message.id)
-                .then(() => {
-                  console.log(
-                    '[SingleChat] ✅ Marked message as read on focus:',
-                    message.id
-                  );
-                })
-                .catch((error) => {
-                  console.error(
-                    '[SingleChat] Error marking message as read on focus:',
-                    error
-                  );
-                  if (!isRateLimitError(error)) {
-                    // Remove from set on non-throttle errors so we can retry later.
-                    markedAsReadRef.current.delete(message.id);
-                  }
-                });
-            } else {
-              // Mark as processed even if already read to avoid duplicate checks
-              markedAsReadRef.current.add(message.id);
-            }
+      unreadIds.forEach((id) => markedAsReadRef.current.add(id));
+
+      messageServices
+        .markAllMessagesAsRead(parseInt(conversationId, 10))
+        .catch((error) => {
+          console.error('[SingleChat] Error marking messages as read:', error);
+          if (!isRateLimitError(error)) {
+            unreadIds.forEach((id) => markedAsReadRef.current.delete(id));
           }
-
-          // Mark as delivered if not already delivered
-          if (!markedAsDeliveredRef.current.has(message.id)) {
-            // Check if message is already delivered by checking statuses
-            const isAlreadyDelivered = message.statuses?.some(
-              (status) =>
-                status.participant_id === currentUserId &&
-                status.delivered_at !== null
-            );
-
-            if (!isAlreadyDelivered) {
-              markedAsDeliveredRef.current.add(message.id);
-              messageServices
-                .markMessageDelivered(message.id)
-                .then(() => {
-                  console.log(
-                    '[SingleChat] ✅ Marked message as delivered on focus:',
-                    message.id
-                  );
-                })
-                .catch((error) => {
-                  console.error(
-                    '[SingleChat] Error marking message as delivered on focus:',
-                    error
-                  );
-                  if (!isRateLimitError(error)) {
-                    // Remove from set on non-throttle errors so we can retry later.
-                    markedAsDeliveredRef.current.delete(message.id);
-                  }
-                });
-            } else {
-              // Mark as processed even if already delivered to avoid duplicate checks
-              markedAsDeliveredRef.current.add(message.id);
-            }
-          }
-        }
-      });
-      // Note: intentionally no cleanup returned here — useFocusEffect
-      // re-invokes this callback (and would run any returned cleanup)
-      // every time `messages` changes while still focused, since the
-      // callback identity is part of its dependency array. Resetting the
-      // mark-all-read gate there would refire it on every new message,
-      // which is exactly the redundant behavior being fixed. The gate is
-      // reset on a real navigation 'blur' instead (see effect below).
-    }, [conversationId, messages, currentUser])
+        });
+    },
+    [conversationId, currentUser?.id]
   );
+
+  useFocusEffect(
+    useCallback(() => {
+      markUnreadMessagesRead(messages);
+    }, [messages, markUnreadMessagesRead])
+  );
+
+  // Back from the background while the thread is open: report what arrived.
+  useEffect(() => {
+    const subscription = AppState.addEventListener(
+      'change',
+      (state: AppStateStatus) => {
+        if (state === 'active' && isScreenFocusedRef.current) {
+          markUnreadMessagesRead(messagesRef.current);
+        }
+      }
+    );
+    return () => subscription.remove();
+  }, [markUnreadMessagesRead]);
+
+  // The server refused a send because one side has blocked the other. Swap the
+  // composer for the blocked bar at once (generic wording), then ask the
+  // server which side it is so "You blocked ..." + Unblock can be shown.
+  const onSendBlocked = () => {
+    flashErrorMessage(LanguageKeys.chatErrorBlocked);
+    setIsBlockedYou(true);
+
+    const partnerId = otherUserData?.id;
+    if (!partnerId) return;
+    const me = currentUser?.id;
+    messageServices
+      .getConversationWithUser(partnerId)
+      .then((conversation) => {
+        if (!conversation) return;
+        const myRow = conversation.participants?.find(
+          (p) => String(p.id) === String(me)
+        );
+        const iBlocked = !!getOtherParticipant(conversation, me)?.is_blocked;
+        const theyBlocked = !!myRow?.is_blocked;
+        if (iBlocked || theyBlocked) {
+          setIsBlockedByYou(iBlocked);
+          setIsBlockedYou(theyBlocked);
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('[SingleChat] Block state lookup failed:', error);
+      });
+  };
 
   const { onSendPress, retryMessage, discardMessage } = useSendMessage({
     otherUserData,
@@ -1313,6 +1176,7 @@ const SingleChat = (props: any) => {
     currentUserId: currentUser?.id,
     isBlockedByYou,
     setInputMessage: setInputText,
+    onBlocked: onSendBlocked,
     onWaitForReply: () => setServerSaysWait(true),
     onConversationStarted: () => setCreatedHere(true),
   });
@@ -1363,6 +1227,32 @@ const SingleChat = (props: any) => {
     ]);
   };
 
+  // Report: long-press a received message -> pick a reason -> send.
+  const [reportTarget, setReportTarget] = useState<ChatMessage | null>(null);
+  const isSupportChat =
+    conversationData?.type === 'support' || otherUserData?.type === 'Admin';
+
+  const closeReportPicker = () => setReportTarget(null);
+
+  const onReportReasonPress = async (item: { value?: string }) => {
+    const target = reportTarget;
+    if (!target || !item?.value || item.value === 'cancel') return;
+    try {
+      await messageServices.reportMessage(target.id, { reason: item.value });
+      flashSuccessMessage(LanguageKeys.chatReportSent);
+    } catch (error: unknown) {
+      flashErrorMessage(chatErrorMessageKey(error));
+    }
+  };
+
+  const reportPickerData = [
+    ...REPORT_REASONS.map((reason) => ({
+      label: t(reason.labelKey),
+      value: reason.value,
+    })),
+    { label: t(LanguageKeys.cancel), value: 'cancel' },
+  ];
+
   useEffect(() => {
     const unsubscribe = props.navigation.addListener('blur', () => {
       void stopAudioPlayback();
@@ -1370,9 +1260,8 @@ const SingleChat = (props: any) => {
         'chat_activity',
         currentUser?.created_at
       );
-      // Allow the bulk mark-all-read to fire again next time this screen
-      // regains focus (e.g. messages arrived while the user was elsewhere).
-      hasMarkedAllOnFocusRef.current = false;
+      // A half-recorded voice note is dropped when the member leaves.
+      void abortVoiceRecordingRef.current();
     });
     return unsubscribe;
   }, [props.navigation, currentUser?.created_at, stopAudioPlayback]);
@@ -1423,10 +1312,6 @@ const SingleChat = (props: any) => {
 
   const onDisabledInputPress = () => {
     flashInfoMessage(LanguageKeys.disabledChatDescription);
-  };
-
-  const onWaliPress = () => {
-    props.navigation.navigate('AddWali', { fromSettings: true });
   };
 
   const onViewProfilePress = () => {
@@ -1501,7 +1386,7 @@ const SingleChat = (props: any) => {
         conversationIdNum,
         otherUserData.id
       );
-      _setIsBlockedByYou(false);
+      setIsBlockedByYou(false);
       flashSuccessMessage(LanguageKeys.unBlocked);
     } catch (error: unknown) {
       flashErrorMessage(chatErrorMessageKey(error));
@@ -1538,15 +1423,21 @@ const SingleChat = (props: any) => {
           });
         },
       });
+      // The member left (or the app was backgrounded) while the recorder was
+      // starting: do not leave it running unseen.
+      if (
+        !isScreenFocusedRef.current ||
+        AppState.currentState === 'background'
+      ) {
+        await chatAudioService.cancelRecording();
+        return;
+      }
       setIsRecordingVoice(true);
+      // Capped here; the auto-stop effect below ends the note at the cap.
       voiceTimerRef.current = setInterval(() => {
-        setVoiceElapsedSeconds((seconds) => {
-          if (seconds >= 60) {
-            clearVoiceTimer();
-            return 60;
-          }
-          return seconds + 1;
-        });
+        setVoiceElapsedSeconds((seconds) =>
+          Math.min(seconds + 1, MAX_VOICE_SECONDS)
+        );
       }, 1000);
     } catch (error) {
       flashErrorMessage(LanguageKeys.microphonePermissionDenied);
@@ -1555,10 +1446,14 @@ const SingleChat = (props: any) => {
 
   const cancelVoiceRecording = async () => {
     clearVoiceTimer();
-    await chatAudioService.cancelRecording();
     setIsRecordingVoice(false);
     setVoiceElapsedSeconds(0);
-    setVoiceWaveformPeaks([]);
+    setVoiceWaveformPeaks((previous) => (previous.length ? [] : previous));
+    try {
+      await chatAudioService.cancelRecording();
+    } catch (error) {
+      console.error('[SingleChat] Error cancelling recording:', error);
+    }
   };
 
   const sendVoiceRecording = async () => {
@@ -1595,6 +1490,20 @@ const SingleChat = (props: any) => {
     }
   };
 
+  // Always the latest versions, for callers that outlive a render.
+  const sendVoiceRecordingRef = useRef(sendVoiceRecording);
+  useEffect(() => {
+    abortVoiceRecordingRef.current = cancelVoiceRecording;
+    sendVoiceRecordingRef.current = sendVoiceRecording;
+  });
+
+  // A voice note stops by itself at the length cap and is sent.
+  useEffect(() => {
+    if (isRecordingVoice && voiceElapsedSeconds >= MAX_VOICE_SECONDS) {
+      void sendVoiceRecordingRef.current();
+    }
+  }, [isRecordingVoice, voiceElapsedSeconds]);
+
   return (
     <Container>
       {/* {(currentUser?.membership_status === 0 ||
@@ -1614,6 +1523,7 @@ const SingleChat = (props: any) => {
         currentUserId={currentUser?.id}
         isBlockedByYou={isBlockedByYou}
         isBlockedYou={isBlockedYou}
+        onBlockedByYouChange={setIsBlockedByYou}
         isPartnerDeleted={isPartnerDeleted}
         setMessages={setMessages}
       />
@@ -1623,19 +1533,6 @@ const SingleChat = (props: any) => {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={Styles.innerContainer}>
-          {/* Wali/guardian banner hidden for now (comment out only, per
-            explicit direction -- guardian is core functionality, not being
-            removed).
-        {guardian ? (
-          <Ripple style={Styles.guardianTextWrapper} onPress={onWaliPress}>
-            <Text style={Styles.guardianText}>{t('monitoredByWali')}</Text>
-          </Ripple>
-        ) : currentUser?.gender === 'female' ? (
-          <Ripple style={Styles.guardianTextWrapper} onPress={onWaliPress}>
-            <Text style={Styles.guardianText}>{t('addAWali')}</Text>
-          </Ripple>
-        ) : null} */}
-
           {/* Typing Indicator */}
           {isOtherUserTyping && (
             <TypingIndicator userName={otherUserData?.name} />
@@ -1715,6 +1612,11 @@ const SingleChat = (props: any) => {
                       isWaitingForReply={waitingForReply}
                       onFailedPress={onFailedMessagePress}
                       onFailedLongPress={onFailedMessageLongPress}
+                      onReportPress={
+                        !isSupportChat && canReportMessage(item, currentUserId)
+                          ? setReportTarget
+                          : undefined
+                      }
                       messagePressedId={messagePressedId}
                       onMessagePress={onMessagePress}
                       getAudioPlayback={getAudioPlayback}
@@ -1816,9 +1718,9 @@ const SingleChat = (props: any) => {
                   }}
                   numberOfLines={2}
                 >
-                  {`You blocked ${
-                    otherUserData?.name || 'this member'
-                  }. Unblock to send messages.`}
+                  {t(LanguageKeys.chatYouBlockedMember, {
+                    name: otherUserData?.name || 'this member',
+                  })}
                 </Text>
                 <TouchableOpacity
                   onPress={onUnblockFromComposer}
@@ -1842,6 +1744,33 @@ const SingleChat = (props: any) => {
                     {t(LanguageKeys.unBlock)}
                   </Text>
                 </TouchableOpacity>
+              </View>
+            ) : isBlockedYou ? (
+              // The other member blocked you (or the server refused a send):
+              // nothing to unblock from here, just say so.
+              <View
+                style={{
+                  flexDirection: Rtl ? 'row-reverse' : 'row',
+                  alignItems: 'center',
+                  paddingVertical: wp(3.5),
+                  paddingHorizontal: wp(4),
+                  borderTopWidth: 1,
+                  borderTopColor: Colors.hairline,
+                  gap: wp(3),
+                }}
+              >
+                <Ionicons name="ban" size={wp(5)} color={Colors.muted} />
+                <Text
+                  style={{
+                    flex: 1,
+                    color: Colors.muted,
+                    fontSize: wp(3.4),
+                    textAlign: Rtl ? 'right' : 'left',
+                  }}
+                  numberOfLines={2}
+                >
+                  {t(LanguageKeys.chatErrorBlocked)}
+                </Text>
               </View>
             ) : waitingForReply ? (
               // Men must wait for the first reply before sending again.
@@ -1932,6 +1861,13 @@ const SingleChat = (props: any) => {
           </View>
         </View>
       </KeyboardAvoidingView>
+      <ButtonPicker
+        visible={!!reportTarget}
+        data={reportPickerData}
+        headerTitle={t(LanguageKeys.chatReportReasonTitle)}
+        onButtonPress={onReportReasonPress}
+        onClose={closeReportPicker}
+      />
     </Container>
   );
 };

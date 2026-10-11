@@ -38,8 +38,11 @@ type SingleChatHeaderProps = {
   conversationData: any;
   conversationId: string;
   currentUserId: string | number;
+  /** Block state is owned by SingleChat so the composer reacts at once. */
   isBlockedByYou: boolean;
   isBlockedYou: boolean;
+  /** Called after a successful block / unblock with the new state. */
+  onBlockedByYouChange: (blocked: boolean) => void;
   /** Partner's account is gone: no profile, badges or block actions. */
   isPartnerDeleted?: boolean;
   setMessages: (messages: Message[]) => void;
@@ -52,22 +55,15 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
     conversationId,
     otherUserData,
     currentUserId,
-    isBlockedByYou: propsIsBlockedByYou,
-    isBlockedYou: propsIsBlockedYou,
+    isBlockedByYou,
+    isBlockedYou,
+    onBlockedByYouChange,
     isPartnerDeleted = false,
     setMessages,
   } = props;
 
   const isSupportConversation =
     conversationData?.type === 'support' || otherUserData?.type === 'Admin';
-
-  const [isBlockedByYou, setIsBlockedByYou] = useState(propsIsBlockedByYou);
-  const [isBlockedYou, setIsBlockedYou] = useState(propsIsBlockedYou);
-
-  useEffect(() => {
-    setIsBlockedByYou(propsIsBlockedByYou);
-    setIsBlockedYou(propsIsBlockedYou);
-  }, [propsIsBlockedByYou, propsIsBlockedYou]);
 
   // Block/unblock acts on the conversation pivot, which only needs the
   // conversation id — not the full conversationData object (which can be sparse
@@ -132,21 +128,15 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
 
     try {
       const willBlock = !isBlockedByYou;
-      const params = {
-        type: 7,
-        action_user_id: otherUserData?.id,
-        allow_photo_request: 0,
-      };
-      await ApiServices.interactionAction(params);
 
       const conversationIdNum = parseInt(conversationId, 10);
       if (isNaN(conversationIdNum)) {
         throw new Error('Invalid conversation ID');
       }
 
-      // Drive the REST conversation pivot (the gate sendMessage() checks).
-      // block sets is_blocked=true, unblock clears it — replacing the legacy
-      // Firebase RTDB block flag.
+      // The server keeps the profile block list and this conversation's block
+      // flag in sync, so the chat endpoints are the only call needed (a
+      // separate profile-block toggle would double-apply).
       if (willBlock) {
         await messageServices.blockConversationParticipant(
           conversationIdNum,
@@ -162,7 +152,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
       flashSuccessMessage(
         willBlock ? LanguageKeys.blocked : LanguageKeys.unBlocked
       );
-      setIsBlockedByYou(willBlock);
+      onBlockedByYouChange(willBlock);
       hideModalLoader();
     } catch (error: unknown) {
       flashErrorMessage(chatErrorMessageKey(error));
@@ -204,7 +194,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
       );
 
       flashSuccessMessage(LanguageKeys.blocked);
-      setIsBlockedByYou(true);
+      onBlockedByYouChange(true);
       hideModalLoader();
     } catch (error: unknown) {
       flashErrorMessage(chatErrorMessageKey(error));

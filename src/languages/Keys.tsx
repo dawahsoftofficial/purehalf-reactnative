@@ -712,6 +712,13 @@ const Keys = {
   chatDeleteUnsent: 'chatDeleteUnsent',
   chatWaitForReplyHint: 'chatWaitForReplyHint',
   chatRetry: 'chatRetry',
+  chatReportReasonTitle: 'chatReportReasonTitle',
+  chatReportReasonSpam: 'chatReportReasonSpam',
+  chatReportReasonAbuse: 'chatReportReasonAbuse',
+  chatReportReasonInappropriate: 'chatReportReasonInappropriate',
+  chatReportReasonOther: 'chatReportReasonOther',
+  chatReportSent: 'chatReportSent',
+  chatYouBlockedMember: 'chatYouBlockedMember',
   chatVoiceNeedsText: 'chatVoiceNeedsText',
 };
 

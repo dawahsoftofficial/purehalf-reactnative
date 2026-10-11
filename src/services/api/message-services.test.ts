@@ -164,6 +164,42 @@ describe('messageServices coded errors', () => {
     );
   });
 
+  it('requests the given inbox page with per_page', async () => {
+    (Api.get as jest.Mock).mockResolvedValue({
+      data: { error: false, results: [{ id: 1 }] },
+    });
+
+    await messageServices.getConversationsList({ page: 3, per_page: 20 });
+
+    expect((Api.get as jest.Mock).mock.calls[0][1]).toEqual({
+      params: { per_page: 20, page: 3 },
+    });
+  });
+
+  it('defaults the inbox to page 1', async () => {
+    (Api.get as jest.Mock).mockResolvedValue({
+      data: { error: false, results: [] },
+    });
+
+    await messageServices.getConversationsList();
+
+    expect((Api.get as jest.Mock).mock.calls[0][1]).toEqual({
+      params: { per_page: 20, page: 1 },
+    });
+  });
+
+  it('posts a report with the reason', async () => {
+    (Api.post as jest.Mock).mockResolvedValue({
+      data: { error: false, results: null },
+    });
+
+    await messageServices.reportMessage(55, { reason: 'Spam or scam' });
+
+    expect((Api.post as jest.Mock).mock.calls[0][1]).toEqual({
+      reason: 'Spam or scam',
+    });
+  });
+
   it('gives voice notes a longer upload timeout than text', async () => {
     (Api.post as jest.Mock).mockResolvedValue({
       data: { error: false, results: { id: 1 } },

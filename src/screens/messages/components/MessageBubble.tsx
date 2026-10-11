@@ -45,6 +45,11 @@ type Props = {
   onFailedPress?: (item: ChatMessage) => void;
   /** Long-press on an unsent (failed) bubble: retry / delete menu. */
   onFailedLongPress?: (item: ChatMessage) => void;
+  /**
+   * Long-press on a received message: report it. Omit to offer nothing (own
+   * messages, unsent bubbles, support chats).
+   */
+  onReportPress?: (item: ChatMessage) => void;
 
   messagePressedId: any;
   onMessagePress: (messageId: any) => void;
@@ -66,6 +71,7 @@ const MessageBubble = ({
   isWaitingForReply = false,
   onFailedPress,
   onFailedLongPress,
+  onReportPress,
   messagePressedId,
   onMessagePress,
   getAudioPlayback,
@@ -150,7 +156,13 @@ const MessageBubble = ({
         onPress={() =>
           isFailed ? onFailedPress?.(item) : onMessagePress(item?.id)
         }
-        onLongPress={isFailed ? () => onFailedLongPress?.(item) : undefined}
+        onLongPress={
+          isFailed
+            ? () => onFailedLongPress?.(item)
+            : onReportPress
+              ? () => onReportPress(item)
+              : undefined
+        }
         activeOpacity={0.9}
       >
         {item?.type === 'audio' ? (

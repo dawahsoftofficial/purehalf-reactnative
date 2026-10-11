@@ -74,8 +74,6 @@ const EndPoints = {
     `/auth/conversations/messages/${messageId}/read`,
   markAllMessagesAsRead: (conversationId: number) =>
     `/auth/conversations/${conversationId}/mark-all-read`,
-  markMessageDelivered: (messageId: number) =>
-    `/auth/conversations/messages/${messageId}/delivered`,
   collectChatCredit: '/auth/collect/chat-credit',
   dailyChatCreditReward: '/auth/chat-credit/daily-reward',
 

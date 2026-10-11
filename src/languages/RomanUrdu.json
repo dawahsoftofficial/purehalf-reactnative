@@ -699,6 +699,13 @@
     "chatDeleteUnsent": "Delete message",
     "chatWaitForReplyHint": "Wait for a reply before sending another message",
     "chatRetry": "Retry",
+    "chatReportReasonTitle": "Why are you reporting this message?",
+    "chatReportReasonSpam": "Spam or scam",
+    "chatReportReasonAbuse": "Harassment or abuse",
+    "chatReportReasonInappropriate": "Inappropriate content",
+    "chatReportReasonOther": "Other",
+    "chatReportSent": "Thank you. Our team will review this message.",
+    "chatYouBlockedMember": "You blocked {{name}}. Unblock to send messages.",
     "chatVoiceNeedsText": "Please send a text message before voice notes."
   }
 }

@@ -65,17 +65,21 @@ export function isWaitingForReply(input: WaitForReplyInput): boolean {
 
 /**
  * Whether the conversation `start` returned was just created (as opposed to
- * `start` appending to an existing - possibly cleared/deleted - one; the
- * response carries no flag). The caller only asks when the screen had no
- * conversation id, i.e. the lookup found none; on top of that, in a brand-new
- * conversation nobody has read anything, so any other participant with a
- * `last_read_message_id` proves the conversation already existed. Best effort:
- * a first message racing another device of the same member is not detected.
+ * `start` appending to an existing - possibly cleared/deleted - one). The
+ * server states it in `created`; that is authoritative. Only an older server
+ * omits the field, and then a heuristic decides: the caller only asks when the
+ * screen had no conversation id, i.e. the lookup found none, and in a
+ * brand-new conversation nobody has read anything, so any other participant
+ * with a `last_read_message_id` proves the conversation already existed. Best
+ * effort: a first message racing another device of the same member is not
+ * detected.
  */
 export function startedFreshConversation(
   conversation: Conversation | null | undefined,
   currentUserId: string | number | null | undefined
 ): boolean {
+  if (typeof conversation?.created === 'boolean') return conversation.created;
+
   const others = (conversation?.participants ?? []).filter(
     (p) => String(p.id) !== String(currentUserId)
   );

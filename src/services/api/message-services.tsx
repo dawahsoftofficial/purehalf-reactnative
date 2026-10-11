@@ -178,15 +178,19 @@ class MessageServices {
   };
 
   /**
-   * Gets list of conversations for the authenticated user
+   * Gets one page of the authenticated user's conversations. The response has
+   * no total: keep requesting the next page until one comes back with fewer
+   * than `per_page` items.
    * @param params - Optional query parameters
    * @param params.per_page - Number of items per page (default: 20)
+   * @param params.page - 1-based page number (default: 1)
    * @returns Promise resolving to array of conversation objects
    */
   getConversationsList = (params?: GetConversationsListParams) => {
     return new Promise<Conversation[]>((resolve, reject) => {
       const queryParams = {
         per_page: params?.per_page || 20,
+        page: params?.page || 1,
       };
 
       Api.get(EndPoints.getConversationsList, { params: queryParams })
@@ -687,54 +691,6 @@ class MessageServices {
           const chatError = toChatApiError(error);
           const errorMessage = chatError.message;
           console.error('[MessageServices.markAllMessagesAsRead] Error:', {
-            message: errorMessage,
-            status: error?.response?.status,
-            data: error?.response?.data,
-          });
-          reject(chatError);
-        });
-    });
-  };
-
-  /**
-   * Marks a message as delivered
-   * @param messageId - Message ID to mark as delivered
-   * @returns Promise resolving to void on success
-   */
-  markMessageDelivered = (messageId: number) => {
-    return new Promise<void>((resolve, reject) => {
-      Api.post(
-        EndPoints.markMessageDelivered(messageId),
-        {},
-        {
-          params: { messageid: messageId },
-        }
-      )
-        .then((response) => {
-          const data = response.data as StandardResponse;
-
-          // Validate response structure
-          if (data?.error === true) {
-            console.error(
-              '[MessageServices.markMessageDelivered] API returned error:',
-              data?.message || 'Unknown error'
-            );
-            reject(
-              new ChatApiError(
-                'UNKNOWN',
-                data?.message || 'Failed to mark message as delivered'
-              )
-            );
-            return;
-          }
-
-          // Resolve on success
-          resolve();
-        })
-        .catch((error) => {
-          const chatError = toChatApiError(error);
-          const errorMessage = chatError.message;
-          console.error('[MessageServices.markMessageDelivered] Error:', {
             message: errorMessage,
             status: error?.response?.status,
             data: error?.response?.data,

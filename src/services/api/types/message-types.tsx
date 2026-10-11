@@ -70,6 +70,12 @@ export type Conversation = {
   last_message_at: string;
   participants: Participant[];
   last_message_detail: LastMessageDetail | null;
+  /**
+   * Only on the `start` response: true when this call created the
+   * conversation, false when it appended to an existing one. Absent on older
+   * servers.
+   */
+  created?: boolean;
 };
 
 /**
@@ -117,6 +123,8 @@ export type GetConversationResponse = {
  */
 export type GetConversationsListParams = {
   per_page?: number;
+  /** 1-based page number (the list has no total; page until a short page). */
+  page?: number;
 };
 
 /**
