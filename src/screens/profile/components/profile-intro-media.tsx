@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Modal, StyleSheet, Text as RNText, View } from 'react-native';
 import Ripple from 'react-native-material-ripple';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -56,6 +57,7 @@ const waveform = [
 ];
 
 const ProfileIntroMedia = ({ isOwner, media, navigation }: Props) => {
+  const { t } = useTranslation();
   const videoEnabled = useSettingsStore().getProfileIntroVideoEnabled();
   const voiceEnabled = useSettingsStore().getProfileIntroVoiceEnabled();
   const [playingKind, setPlayingKind] = useState<IntroMediaKind | null>(null);
@@ -155,7 +157,7 @@ const ProfileIntroMedia = ({ isOwner, media, navigation }: Props) => {
                   : setPlayingKind(option.kind)
               }
               accessibilityRole="button"
-              accessibilityLabel={actionLabel}
+              accessibilityLabel={t(actionLabel)}
             >
               <View style={Styles.iconCircle}>
                 <Ionicons

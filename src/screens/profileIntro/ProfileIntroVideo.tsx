@@ -253,7 +253,7 @@ const ProfileIntroVideo = ({ navigation }: any) => {
             onPress={() =>
               setCameraType((value) => (value === 'front' ? 'back' : 'front'))
             }
-            accessibilityLabel={LanguageKeys.flipCamera}
+            accessibilityLabel={t(LanguageKeys.flipCamera)}
           >
             <Ionicons
               name="camera-reverse-outline"
