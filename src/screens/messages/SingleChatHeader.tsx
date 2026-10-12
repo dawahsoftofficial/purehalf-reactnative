@@ -475,7 +475,12 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
             )}
           </View>
           <View style={Styles.titleRow}>
-            <Text variant="display" style={Styles.userName} numberOfLines={1}>
+            <Text
+              variant="display"
+              style={Styles.userName}
+              numberOfLines={1}
+              translate={false}
+            >
               {capitalizeName(otherUserData?.name)}
             </Text>
             {!isSupportConversation && !isPartnerDeleted ? (
