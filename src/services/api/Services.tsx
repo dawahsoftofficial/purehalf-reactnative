@@ -17,6 +17,7 @@ import { LanguageKeys } from '../../languages';
 import {
   fcmTokenForUpload,
   isUsableFcmToken,
+  pickFcmToken,
 } from '../../notifications/fcmToken';
 import { isIOS } from '../CommonServices';
 import { Firebase } from '../firebase';
@@ -38,7 +39,10 @@ const auth = getAuth(firebaseApp);
 
 class GApiServices {
   /**
-   * Gets a valid FCM token from storage, or fetches a fresh one if the stored token is a placeholder
+   * Gets this device's current FCM token, falling back to the stored one only
+   * when Firebase can't be reached. The stored copy can be stale (Firebase
+   * rotates tokens), and uploading a stale token at login gets it rejected as
+   * NotRegistered and deleted server-side, silently ending push delivery.
    * @returns Promise<string> - A valid FCM token or placeholder 'FcmToken' for iOS emulator
    */
   private async getValidFcmToken(): Promise<string> {
@@ -48,33 +52,25 @@ class GApiServices {
         | null
         | undefined;
 
-      // If stored token is valid and not a placeholder, use it
-      if (storedToken && storedToken !== 'FcmToken' && storedToken.length > 0) {
-        return storedToken;
-      }
-
-      // If stored token is the placeholder 'FcmToken' or empty, try to get a fresh token
+      let freshToken: string | null | undefined;
       try {
-        const freshToken = (await Firebase.getFcmToken()) as
+        freshToken = (await Firebase.getFcmToken()) as
           | string
           | null
           | undefined;
-        if (freshToken && freshToken !== 'FcmToken' && freshToken.length > 0) {
-          // Save the fresh token for future use
-          await setData(storageKeys.FCM_TOKEN, freshToken);
-          return freshToken;
-        }
       } catch (error) {
-        // Silently handle error - permissions might not be granted yet
-        // This is expected behavior and not a critical error
+        // Permissions might not be granted yet; fall back to the stored token.
         console.log(
           '[getValidFcmToken] Could not fetch fresh FCM token (permissions may not be granted):',
           error instanceof Error ? error.message : String(error)
         );
       }
 
-      // Return stored token if exists, otherwise return placeholder
-      return storedToken || 'FcmToken';
+      const token = pickFcmToken(freshToken, storedToken);
+      if (token !== storedToken && isUsableFcmToken(token)) {
+        await setData(storageKeys.FCM_TOKEN, token);
+      }
+      return token;
     } catch (error) {
       console.error(
         '[getValidFcmToken] Error retrieving FCM token from storage:',
