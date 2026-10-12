@@ -4,6 +4,7 @@ import { Dimensions, Linking, Platform } from 'react-native';
 import type MapView from 'react-native-maps';
 
 import MapWithMarker from '../../components/MapWithMarker';
+import { LanguageKeys } from '../../languages';
 import {
   ApiServices,
   flashErrorMessage,
@@ -99,7 +100,7 @@ const Location = (props: any) => {
         // A timeout is transient (GPS just couldn't get a fix in time) — let the user retry
         // instead of bouncing them out to the system settings screen.
         if (error?.code === 3) {
-          flashErrorMessage('Could not find your location. Please try again.');
+          flashErrorMessage(LanguageKeys.locationNotFound);
           return;
         }
         // Permission denied or location services off — direct the user to settings.
@@ -108,7 +109,7 @@ const Location = (props: any) => {
         } else {
           Linking.openSettings();
         }
-        flashErrorMessage('Please enable location from settings');
+        flashErrorMessage(LanguageKeys.enableLocationInSettings);
       },
       {
         enableHighAccuracy: false,
@@ -136,7 +137,7 @@ const Location = (props: any) => {
         currentUser.longitude = position?.longitude;
         await setData(storageKeys.USER, currentUser);
         updateCurrentUser(currentUser);
-        flashSuccessMessage('Location Updated');
+        flashSuccessMessage(LanguageKeys.locationUpdated);
         setLoading(false);
         props?.navigation?.goBack();
       })

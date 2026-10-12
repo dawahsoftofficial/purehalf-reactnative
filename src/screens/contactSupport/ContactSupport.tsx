@@ -51,7 +51,7 @@ const ContactSupport = ({ navigation }: any) => {
       .then(async () => {
         setComment('');
         setSelectedReason({ id: '', value: '' });
-        flashSuccessMessage('Submitted successfully');
+        flashSuccessMessage(LanguageKeys.submittedSuccessfully);
         setLoading(false);
       })
       .catch((error) => {

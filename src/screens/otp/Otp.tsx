@@ -272,7 +272,7 @@ const Otp = (props: OtpProps) => {
   const handleAccountDeletion = useCallback(
     async (code: string) => {
       if (!purposeOfLeaving) {
-        flashErrorMessage('Please select purpose of leaving');
+        flashErrorMessage(LanguageKeys.selectPurposeOfLeaving);
         return;
       }
 

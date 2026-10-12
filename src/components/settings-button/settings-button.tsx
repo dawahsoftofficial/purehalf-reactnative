@@ -1,4 +1,5 @@
 import React, { memo, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Ripple from 'react-native-material-ripple';
 import AntDesign from 'react-native-vector-icons/AntDesign';
@@ -29,6 +30,7 @@ function SettingsButton({
   showDivider = false,
 }: SettingsButtonProps) {
   const Rtl = CheckRtl();
+  const { t } = useTranslation();
 
   const iconElement = useMemo(
     () => (
@@ -65,7 +67,9 @@ function SettingsButton({
       onPress={onPress}
       disabled={disabled}
       hitSlop={Styles.hitSlop}
-      accessibilityLabel={accessibilityLabel ?? name}
+      // `name` is a translation key (Text translates it for display), so the
+      // screen-reader label must be translated too, not announced raw.
+      accessibilityLabel={t(accessibilityLabel ?? name)}
       accessibilityRole="button"
     >
       {Rtl && arrowElement}

@@ -496,25 +496,23 @@ const Header = ({
               if (refreshedCredits >= requiredCredits) {
                 navigateToChat();
               } else {
-                flashErrorMessage(
-                  'You need a chat bundle to start a new conversation.'
-                );
+                flashErrorMessage(LanguageKeys.chatBundleRequired);
               }
             } catch (error) {
               console.error('Error refreshing user data:', error);
-              flashErrorMessage(
-                'Failed to refresh your chats. Please try again.'
-              );
+              flashErrorMessage(LanguageKeys.refreshChatsFailed);
             }
           } else if (
             result.error &&
             result.error !== 'Purchase cancelled by user'
           ) {
-            flashErrorMessage(result.error || 'Failed to purchase chat bundle');
+            flashErrorMessage(
+              result.error || LanguageKeys.chatCreditsPurchaseError
+            );
           }
         } catch (error) {
           console.error('Error presenting chat credits paywall:', error);
-          flashErrorMessage('Failed to open chat bundles');
+          flashErrorMessage(LanguageKeys.openChatBundlesFailed);
         }
         return;
       }

@@ -1,5 +1,11 @@
 import React, { memo } from 'react';
-import { StyleSheet, TouchableOpacity, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
+import {
+  StyleSheet,
+  Text as RNText,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import AntDesign from 'react-native-vector-icons/AntDesign';
 
 import { Text } from '../../../components';
@@ -16,6 +22,7 @@ type ResendTimerProps = {
 
 function ResendTimer({ seconds, textColor, onResendPress }: ResendTimerProps) {
   const Rtl = CheckRtl();
+  const { t } = useTranslation();
 
   if (seconds > 0) {
     return (
@@ -28,10 +35,9 @@ function ResendTimer({ seconds, textColor, onResendPress }: ResendTimerProps) {
           },
         ]}
       >
-        <Text style={[Styles.timerText, { color: textColor }]}>
-          {LanguageKeys.resendOtp} {seconds.toString()} {LanguageKeys.seconds}
-          ...
-        </Text>
+        <RNText style={[Styles.timerText, { color: textColor }]}>
+          {t(LanguageKeys.resendCodeIn, { seconds })}
+        </RNText>
         <AntDesign
           name="clockcircleo"
           color={textColor}
