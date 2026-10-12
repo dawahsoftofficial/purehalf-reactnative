@@ -879,8 +879,17 @@ class GApiServices {
         'error while uploading image =>',
         (errData as any)?.response ?? errData
       );
+      // Prefer the validation reason (results[0], e.g. "must be at most 10
+      // seconds") over the generic envelope message "Unprocessable Field!".
+      const results = (errData as any)?.results;
+      const reason =
+        Array.isArray(results) && typeof results[0] === 'string'
+          ? results[0]
+          : undefined;
       const error = new Error(
-        (errData as any)?.message ?? `Upload failed: ${response.status}`
+        reason ??
+          (errData as any)?.message ??
+          `Upload failed: ${response.status}`
       ) as Error & { response?: { data?: unknown }; status?: number };
       (error as any).response = { data: errData };
       (error as any).status = response.status;
