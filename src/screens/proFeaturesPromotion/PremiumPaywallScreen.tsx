@@ -42,6 +42,7 @@ import {
   PaginationDots,
   TermsAndConditions,
 } from './components';
+import { calcCompareAt, formatPerDayPrice } from './price-format';
 
 type Props = {
   navigation?: any;
@@ -166,115 +167,6 @@ function formatMoneyFromProduct(product: PurchasesStoreProduct) {
         ? `$${product.price.toFixed(2)}`
         : '')
   );
-}
-
-function formatPerDayPrice(
-  product: PurchasesStoreProduct,
-  pricePerMonth: number | null | undefined
-) {
-  if (!pricePerMonth || pricePerMonth <= 0) return '';
-
-  // Extract currency symbol and value from priceString if available
-  const priceString = product.pricePerMonthString || product.priceString || '';
-
-  // Try to extract currency symbol (e.g., "PKR", "$", "€")
-  const currencyMatch = priceString.match(/^([^\d\s.,]+)/);
-  let currencySymbol = currencyMatch ? currencyMatch[1].trim() : '';
-
-  // If no symbol found, use currency code
-  if (!currencySymbol) {
-    const currency = product.currencyCode || 'USD';
-    currencySymbol =
-      currency === 'USD'
-        ? '$'
-        : currency === 'PKR'
-          ? 'PKR'
-          : currency === 'EUR'
-            ? '€'
-            : currency;
-  }
-
-  // Calculate per day price
-  // Try to extract numeric value from priceString first (more reliable)
-  let numericPrice = pricePerMonth;
-  if (priceString) {
-    // Extract number from price string (handles formats like "PKR4,900.00" or "$19.99")
-    const numberMatch = priceString.replace(/[^\d.,]/g, '').replace(',', '');
-    const parsedPrice = parseFloat(numberMatch);
-    if (!isNaN(parsedPrice) && parsedPrice > 0) {
-      numericPrice = parsedPrice;
-    }
-  }
-
-  // Calculate per day
-  const perDay = numericPrice / 30;
-
-  // Format with proper decimal places
-  const formattedPerDay = perDay.toFixed(2);
-
-  return `${currencySymbol}${formattedPerDay}/day`;
-}
-
-function calcCompareAt(product: PurchasesStoreProduct, multiplier: number) {
-  if (!multiplier) return { compareAtString: '', savePct: 0 };
-
-  // Extract numeric value from priceString (more reliable than raw price values)
-  // This handles cases where price might be in different units on different platforms
-  const priceString = product.pricePerMonthString || product.priceString || '';
-  let base = 0;
-
-  if (priceString) {
-    // Extract number from price string (handles formats like "PKR4,900.00" or "$19.99")
-    const numberMatch = priceString.replace(/[^\d.,]/g, '').replace(',', '');
-    const parsedPrice = parseFloat(numberMatch);
-    if (!isNaN(parsedPrice) && parsedPrice > 0) {
-      base = parsedPrice;
-    }
-  }
-
-  // Fallback to raw price values if priceString parsing fails
-  if (!base) {
-    base = product.pricePerMonth ?? product.price ?? 0;
-    // If the value seems too large (might be in cents/paise), divide by 100
-    // For PKR: 1 PKR = 100 paise, for USD: 1 USD = 100 cents
-    if (
-      base > 10000 &&
-      (product.currencyCode === 'PKR' || product.currencyCode === 'USD')
-    ) {
-      base = base / 100;
-    }
-  }
-
-  if (!base) return { compareAtString: '', savePct: 0 };
-
-  // Presentation-only compare-at
-  const compareAt = Math.round(base * multiplier * 100) / 100;
-  const savePct = Math.max(
-    0,
-    Math.round(((compareAt - base) / compareAt) * 100)
-  );
-
-  // Extract currency symbol from priceString if available
-  const currencyMatch = priceString.match(/^([^\d\s.,]+)/);
-  let currencySymbol = currencyMatch ? currencyMatch[1].trim() : '';
-
-  // If no symbol found, use currency code
-  if (!currencySymbol) {
-    const currency = product.currencyCode || 'USD';
-    currencySymbol =
-      currency === 'USD'
-        ? '$'
-        : currency === 'PKR'
-          ? 'PKR'
-          : currency === 'EUR'
-            ? '€'
-            : currency;
-  }
-
-  // Format compareAt string with currency symbol
-  const compareAtString = `${currencySymbol}${compareAt.toFixed(2)}`;
-
-  return { compareAtString, savePct };
 }
 
 export default function PremiumPaywallScreen({
