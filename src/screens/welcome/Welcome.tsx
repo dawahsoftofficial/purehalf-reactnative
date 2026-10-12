@@ -28,6 +28,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 
 import {
   TESTER_GIFT_CALENDAR_PREVIEW,
+  useNotificationStore,
   usePremiumStore,
   useSettingsStore,
   useTesterPreviewStore,
@@ -203,6 +204,8 @@ const Welcome: React.FC<WelcomeProps> = ({ navigation, route }) => {
   );
 
   const { loaded, isPremium } = usePremiumStore();
+  const unreadNotifications = useNotificationStore((s) => s.unreadCount);
+  const setUnreadNotifications = useNotificationStore((s) => s.setUnreadCount);
   const isPremiumUser = isPremium();
   const { currentUser, updateCurrentUser } = useGlobalContext();
   const { setData, getData, storageKeys } = StorageManager;
@@ -722,6 +725,7 @@ const Welcome: React.FC<WelcomeProps> = ({ navigation, route }) => {
             stats?.photo_requested_you_counter ?? 0
           );
           setPhotoApprovalCount(stats?.photo_request_approved_unread ?? 0);
+          setUnreadNotifications(stats?.unread_notifications ?? 0);
         })
         .catch(() => null);
       handleProfileCompleteData();
@@ -738,6 +742,7 @@ const Welcome: React.FC<WelcomeProps> = ({ navigation, route }) => {
       getUsers,
       handleProfileCompleteData,
       setPhotoApprovalCount,
+      setUnreadNotifications,
       setUserStats,
       usersList.length,
     ])
@@ -877,6 +882,30 @@ const Welcome: React.FC<WelcomeProps> = ({ navigation, route }) => {
                 onPress={() => onRecommendationPress(true)}
               />
             )}
+            {/* The notifications list was only reachable from the old home
+                header's bell; it was lost when the header was redesigned. */}
+            <Ripple
+              rippleColor={Colors.primary}
+              style={Styles.searchIconBtn}
+              onPress={() => navigation.navigate('Notifications')}
+              accessibilityRole="button"
+              accessibilityLabel={t(LanguageKeys.notificationsSection)}
+            >
+              <Ionicons
+                name="notifications-outline"
+                size={wp(5.8)}
+                color={Colors.ink}
+              />
+              {unreadNotifications > 0 ? (
+                <View style={Styles.accountAlertBadge}>
+                  <Text style={Styles.accountAlertBadgeText}>
+                    {unreadNotifications > 99
+                      ? '99+'
+                      : String(unreadNotifications)}
+                  </Text>
+                </View>
+              ) : null}
+            </Ripple>
             <Ripple
               rippleColor={Colors.primary}
               style={Styles.searchIconBtn}
