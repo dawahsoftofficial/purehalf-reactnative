@@ -665,7 +665,7 @@ const RefineSearch = React.forwardRef<RefineSearchRef, RefineSearchProps>(
 
     const onSaveAndSearchPress = () => {
       if (nameQuery.trim().length === 1) {
-        flashErrorMessage('Enter at least 2 characters to search by name.');
+        flashErrorMessage(LanguageKeys.searchNameMinChars);
         return;
       }
       setSaveAndSearchAlertVisble(true);
@@ -690,7 +690,7 @@ const RefineSearch = React.forwardRef<RefineSearchRef, RefineSearchProps>(
 
     const onSearchPress = () => {
       if (nameQuery.trim().length === 1) {
-        flashErrorMessage('Enter at least 2 characters to search by name.');
+        flashErrorMessage(LanguageKeys.searchNameMinChars);
         return;
       }
       setModalLoader({

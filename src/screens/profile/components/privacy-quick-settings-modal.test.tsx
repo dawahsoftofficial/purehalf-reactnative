@@ -160,7 +160,7 @@ describe('PrivacyQuickSettingsModal', () => {
     ).toBe(true);
   });
 
-  it('saves Invisible mode only once Save is pressed, sending search_visibility 0 with the current profile snapshot', async () => {
+  it('saves Invisible mode only once Save is pressed, sending only search_visibility 0', async () => {
     render(<PrivacyQuickSettingsModal visible onClose={jest.fn()} />);
 
     fireEvent.press(screen.getByTestId('quick-privacy-invisible-mode-switch'));
@@ -169,16 +169,11 @@ describe('PrivacyQuickSettingsModal', () => {
     fireEvent.press(screen.getByText('save'));
 
     await waitFor(() =>
-      expect(ApiServices.updateUserInfo).toHaveBeenCalledWith(
-        expect.objectContaining({
-          search_visibility: 0,
-          first_name: 'Amina',
-          last_name: 'Yusuf',
-          gender: 'female',
-          country: 'Pakistan',
-          city: 'Islamabad',
-        })
-      )
+      // Exactly the flag: re-sending profile fields used to rewrite the
+      // birth date and send the profile back for review.
+      expect(ApiServices.updateUserInfo).toHaveBeenCalledWith({
+        search_visibility: 0,
+      })
     );
     await waitFor(() =>
       expect(mockUpdateCurrentUser).toHaveBeenCalledWith(

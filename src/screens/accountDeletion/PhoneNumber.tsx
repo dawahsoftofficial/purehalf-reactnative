@@ -48,17 +48,15 @@ const PhoneNumber = () => {
       selectedCountry.dial_code === '+92' &&
       (phoneNumber.length < 10 || phoneNumber.length > 12)
     ) {
-      flashErrorMessage('Invalid phone number');
+      flashErrorMessage(LanguageKeys.invalidPhoneNumber);
     } else if (selectedCountry.dial_code !== '+92' && phoneNumber.length < 6) {
-      flashErrorMessage('Invalid phone number');
+      flashErrorMessage(LanguageKeys.invalidPhoneNumber);
     } else {
       const phoneNumberWithCode =
         selectedCountry.dial_code +
         (phoneNumber[0] === '0' ? phoneNumber.slice(1) : phoneNumber);
       if (phoneNumberWithCode !== currentUser?.phone_number) {
-        flashErrorMessage(
-          'Please provide correct phone number ( The number with which you created account )'
-        );
+        flashErrorMessage(LanguageKeys.accountDeletionWrongNumber);
       } else {
         setLoading(true);
         Firebase.sendVerificationCode(phoneNumberWithCode)

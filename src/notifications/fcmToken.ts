@@ -16,6 +16,17 @@ export function fcmTokenForUpload(token: unknown): string | undefined {
 }
 
 /**
+ * The token to use for this device: Firebase's current token when available,
+ * else the stored copy, else the placeholder. The stored copy is only a
+ * fallback because Firebase rotates tokens and the cache can go stale.
+ */
+export function pickFcmToken(fresh: unknown, stored: unknown): string {
+  if (isUsableFcmToken(fresh)) return fresh;
+  if (isUsableFcmToken(stored)) return stored;
+  return FCM_TOKEN_PLACEHOLDER;
+}
+
+/**
  * Whether `token` should be uploaded: it is a real token (never the
  * placeholder) and differs from the one last uploaded.
  */

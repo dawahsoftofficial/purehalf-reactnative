@@ -129,7 +129,7 @@ export function PackageCard({
         {/* Badge Row */}
         <View style={styles.badgeRow}>
           <Text style={[styles.planName, { color: c.name }]}>
-            {item.identifier?.split('(')[0]}
+            {item.identifier?.split('(')[0]?.trim()}
           </Text>
 
           <View style={[styles.badge, { backgroundColor: c.badgeBg }]}>

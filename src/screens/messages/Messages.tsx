@@ -511,13 +511,19 @@ const Messages = (props: MessagesProps) => {
             { alignItems: Rtl ? 'flex-end' : 'flex-start' },
           ]}
         >
-          <Text variant="display" style={Styles.itemHeading} numberOfLines={1}>
+          <Text
+            variant="display"
+            style={Styles.itemHeading}
+            numberOfLines={1}
+            translate={false}
+          >
             {capitalizeName(otherParticipant.name)}
           </Text>
           {hasLastMessage && (
             <Text
               style={[Styles.itemMessage, isUnread && Styles.itemMessageUnread]}
               numberOfLines={1}
+              translate={false}
             >
               {previewText}
             </Text>

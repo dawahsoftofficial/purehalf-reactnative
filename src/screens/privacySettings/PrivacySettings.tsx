@@ -1,4 +1,3 @@
-import moment from 'moment';
 import React, { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import Ripple from 'react-native-material-ripple';
@@ -177,45 +176,17 @@ const PrivacySettings = (props: any) => {
       message: '',
     });
 
-  const updateToggle = (params: any) => {
-    const {
-      first_name,
-      last_name,
-      gender,
-      date_of_birth,
-      interface_language_id,
-      country,
-      city,
-      latitude,
-      longitude,
-    } = currentUser;
-
+  const updateToggle = (params: Record<string, number>) => {
     setLoader({
       visible: true,
       message: 'Updating...',
     });
-    const dob = moment(date_of_birth, 'DD MMM,YYYY').toDate();
-    const newParams = {
-      ...params,
-      first_name: first_name,
-      last_name: last_name,
-      gender: gender,
-      date_of_birth: moment(dob).format('YYYY-MM-DD'),
-      interface_language_id: interface_language_id,
-      country: country,
-      city: city,
-      longitude: longitude,
-      latitude: latitude,
-    };
-    ApiServices.updateUserInfo(newParams)
+    // Send only the changed flag. Re-sending the profile fields re-parsed the
+    // server's YYYY-MM-DD birth date with the wrong format (shifting it) and
+    // flagged the profile for re-review.
+    ApiServices.updateUserInfo(params)
       .then(async () => {
-        const updatedUser = {
-          ...currentUser,
-          search_visibility: newParams.search_visibility,
-          in_app_notifications: newParams.in_app_notifications,
-          email_notification: newParams.email_notification,
-          sms_notification: newParams.sms_notification,
-        };
+        const updatedUser = { ...currentUser, ...params };
         updateCurrentUser(updatedUser);
         await setData(storageKeys.USER, updatedUser);
         flashSuccessMessage(LanguageKeys.updated);

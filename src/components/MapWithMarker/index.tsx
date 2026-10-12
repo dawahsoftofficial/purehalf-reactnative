@@ -1,5 +1,6 @@
 import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
+import { Keyboard, StyleSheet, View } from 'react-native';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 import MapView, {
   Marker,
@@ -38,7 +39,9 @@ const MapWithMarker: React.FC<MapWithMarkerProps> = ({
   navigation,
 }) => {
   const { top } = useSafeAreaInsets();
+  const { t } = useTranslation();
   const onPlaceSelected = (data: any, details: any) => {
+    Keyboard.dismiss();
     const { lat, lng } = details?.geometry?.location;
 
     const newPosition = {
@@ -81,8 +84,13 @@ const MapWithMarker: React.FC<MapWithMarkerProps> = ({
         </Ripple>
         <GooglePlacesAutocomplete
           fetchDetails={true}
-          placeholder="Search"
+          placeholder={t(LanguageKeys.search)}
           onPress={onPlaceSelected}
+          // In the default 'auto' mode the library keeps rendering the
+          // suggestions whenever it has results, so the dropdown stayed open
+          // over the map after a pick. With an explicit value it shows the
+          // list on focus and hides it on blur / selection.
+          listViewDisplayed={false}
           enablePoweredByContainer={false}
           query={{
             key: 'AIzaSyAuJHAOwye_HX_Zvpn_cR7CE1PdNl401tY',

@@ -245,7 +245,7 @@ function Location({ navigation }: LocationProps) {
           // Only surface a flash for explicit user attempts. Silent auto-retries
           // (mount / return-to-foreground) must not loop the same message.
           if (fromUser) {
-            flashErrorMessage('Turn on device location (GPS) to continue.');
+            flashErrorMessage(LanguageKeys.turnOnDeviceLocation);
           }
         },
         {
@@ -317,7 +317,7 @@ function Location({ navigation }: LocationProps) {
           } else {
             setBlocker('permission');
             if (fromUser) {
-              flashErrorMessage('Allow location permission to continue.');
+              flashErrorMessage(LanguageKeys.allowLocationPermission);
             }
           }
           return;
@@ -429,7 +429,7 @@ function Location({ navigation }: LocationProps) {
       .then((res: unknown) => {
         const response = res as { data?: { error?: boolean } };
         if (!response?.data?.error) {
-          flashSuccessMessage('Reported successfully');
+          flashSuccessMessage(LanguageKeys.reportedSuccessfully);
           setIsReported(true);
         }
       })

@@ -116,7 +116,7 @@ const filtersData = [
     type: 'radioButton',
   },
   {
-    title: LanguageKeys.sect,
+    title: LanguageKeys.sectFilter,
     data: [],
     type: 'dropDown',
     id: 'sect-0',
