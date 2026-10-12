@@ -12,6 +12,7 @@ import {
   Alert,
   AppState,
   type AppStateStatus,
+  Keyboard,
   KeyboardAvoidingView,
   type LayoutChangeEvent,
   Platform,
@@ -143,11 +144,31 @@ const SingleChat = (props: any) => {
     },
     [edgeToEdgeKeyboard]
   );
+  // KeyboardAvoidingView only re-measures on keyboard events, and on Android
+  // the hide event still yields `offset` worth of padding, which left a gap
+  // under the composer after the keyboard closed (also with floating or
+  // toolbar-only keyboards, which report ~0 height). So the view is only
+  // enabled while a docked keyboard is actually open.
+  const [dockedKeyboardOpen, setDockedKeyboardOpen] = useState(false);
+  useEffect(() => {
+    if (!edgeToEdgeKeyboard) return undefined;
+    const show = Keyboard.addListener('keyboardDidShow', (event) =>
+      setDockedKeyboardOpen((event.endCoordinates?.height ?? 0) > 100)
+    );
+    const hide = Keyboard.addListener('keyboardDidHide', () =>
+      setDockedKeyboardOpen(false)
+    );
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, [edgeToEdgeKeyboard]);
   // The window starts below the (non-translucent) status bar while the
   // keyboard position is reported in screen coordinates, so count it too.
   const keyboardOffset = edgeToEdgeKeyboard
     ? chatParentOffset + bottomInset + (StatusBar.currentHeight ?? 0)
     : 0;
+  const keyboardAvoidingEnabled = !edgeToEdgeKeyboard || dockedKeyboardOpen;
   const Rtl = CheckRtl();
   const flatListRef: any = useRef(null);
   const inputRef: any = useRef(null);
@@ -1691,6 +1712,7 @@ const SingleChat = (props: any) => {
         style={Styles.keyboardAvoidingView}
         behavior="padding"
         keyboardVerticalOffset={keyboardOffset}
+        enabled={keyboardAvoidingEnabled}
         onLayout={onKeyboardAvoidingLayout}
       >
         <View ref={chatBodyRef} style={Styles.innerContainer}>
