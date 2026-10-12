@@ -20,16 +20,21 @@ const messaging = getMessaging(getApp());
 /**
  * Uploads the device's FCM token when notifications are allowed and it differs
  * from the one last confirmed by the backend (rotated while the app was closed,
- * or never uploaded). Best-effort and silent: ApiServices.syncFcmToken does
- * nothing when signed out and never sends the 'FcmToken' placeholder.
+ * or never uploaded). `always` skips the "unchanged" shortcut: the server can
+ * drop a token on its side (rejected send, a login elsewhere), so the app
+ * re-registers once per launch instead of trusting its local copy forever.
+ * Best-effort and silent: ApiServices.syncFcmToken does nothing when signed
+ * out and never sends the 'FcmToken' placeholder.
  */
-async function syncFcmTokenIfChanged(): Promise<void> {
+async function syncFcmTokenIfChanged(always = false): Promise<void> {
   try {
     if ((await getNotificationPermissionStatus()) !== 'granted') return;
     const token = await Firebase.getFcmToken();
-    const lastUploaded = await StorageManager.getData(
-      StorageManager.storageKeys.FCM_TOKEN_UPLOADED
-    );
+    const lastUploaded = always
+      ? null
+      : await StorageManager.getData(
+          StorageManager.storageKeys.FCM_TOKEN_UPLOADED
+        );
     if (!shouldUploadFcmToken(token, lastUploaded)) return;
     await ApiServices.syncFcmToken(token);
   } catch (error) {
@@ -89,8 +94,8 @@ export function usePushHandlers() {
       void ApiServices.syncFcmToken(token);
     });
 
-    // On start and whenever the app returns to the foreground.
-    void syncFcmTokenIfChanged();
+    // Always on start; on returning to the foreground only if it changed.
+    void syncFcmTokenIfChanged(true);
     const appStateSubscription = AppState.addEventListener(
       'change',
       (state: AppStateStatus) => {

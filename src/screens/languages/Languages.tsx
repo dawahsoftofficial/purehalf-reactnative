@@ -65,7 +65,11 @@ const Languages = (props: any) => {
                 updateDirection('ltr', element?.value);
               }
               hideLangaugeChangeLoader();
-              flashSuccessMessage(`Language changed to ${element?.label}`);
+              flashSuccessMessage(
+                i18next.t(LanguageKeys.languageChangedTo, {
+                  language: i18next.t(element?.label),
+                })
+              );
             })
             .catch(hideLangaugeChangeLoader);
         });

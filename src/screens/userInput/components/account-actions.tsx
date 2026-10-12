@@ -1,8 +1,8 @@
-import React, { memo } from 'react';
+import React, { memo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Ripple from 'react-native-material-ripple';
 
-import { Button, Text } from '../../../components';
+import { Button, DeletePicker, Text } from '../../../components';
 import { hp, Typography, wp } from '../../../global';
 import { LanguageKeys } from '../../../languages';
 import { Colors, Fonts } from '../../../res';
@@ -16,17 +16,35 @@ function AccountActions({
   onLogoutPress,
   onDeleteAccountPress,
 }: AccountActionsProps) {
+  const [confirmLogoutVisible, setConfirmLogoutVisible] = useState(false);
+
+  const hideConfirmLogout = () => setConfirmLogoutVisible(false);
+
+  const onConfirmLogout = () => {
+    hideConfirmLogout();
+    onLogoutPress();
+  };
+
   return (
     <View style={Styles.container}>
       <Button
         text={LanguageKeys.logOut}
         variant="outline"
-        onPress={onLogoutPress}
+        onPress={() => setConfirmLogoutVisible(true)}
         buttonStyle={Styles.logoutBtn}
       />
       <Ripple style={Styles.deleteBtn} onPress={onDeleteAccountPress}>
         <Text style={Styles.deleteText}>{LanguageKeys.deleteAccount}</Text>
       </Ripple>
+      <DeletePicker
+        visible={confirmLogoutVisible}
+        headerTitle={LanguageKeys.logOutConfirm}
+        actionButtonLabel={LanguageKeys.logOut}
+        onClose={hideConfirmLogout}
+        onDeletePress={onConfirmLogout}
+        onCancelPress={hideConfirmLogout}
+        useCustomModal={false}
+      />
     </View>
   );
 }

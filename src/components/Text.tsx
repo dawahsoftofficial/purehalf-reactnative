@@ -28,6 +28,12 @@ type TextProps = {
    * in RTL (Urdu) it silently falls back to the default sans styling.
    */
   variant?: 'display';
+  /**
+   * Set to false for member-written content (messages, names). Text is
+   * otherwise used as an i18n key, so a message that happens to match a key
+   * (e.g. "hi" -> "Salaam") would be replaced in the UI.
+   */
+  translate?: boolean;
   children: string | string[];
 };
 
@@ -42,8 +48,10 @@ const Text = React.memo((props: TextProps) => {
     testID,
     containerStyle,
     variant,
+    translate = true,
     children,
   } = props;
+  const render = (value: string) => (translate ? t(value) : value);
 
   const textStyle = useMemo<StyleProp<TextStyle>>(() => {
     const alignSelf: TextStyle = {
@@ -67,7 +75,7 @@ const Text = React.memo((props: TextProps) => {
         minimumFontScale={minimumFontScale}
         testID={testID}
       >
-        {t(children)}
+        {render(children)}
       </RNText>
     );
   }
@@ -83,7 +91,7 @@ const Text = React.memo((props: TextProps) => {
       >
         {children.map((element: string, index: number) => (
           <RNText style={textStyle} key={index}>
-            {t(element)}
+            {render(element)}
           </RNText>
         ))}
       </View>

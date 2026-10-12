@@ -1,4 +1,3 @@
-import moment from 'moment';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import Ripple from 'react-native-material-ripple';
@@ -97,30 +96,11 @@ const PrivacyQuickSettingsModal = ({
       let updatedUser = { ...currentUser };
 
       if (searchVisibilityChanged) {
-        const {
-          first_name,
-          last_name,
-          gender,
-          date_of_birth,
-          interface_language_id,
-          country,
-          city,
-          latitude,
-          longitude,
-        } = currentUser ?? {};
-        const dob = moment(date_of_birth, 'DD MMM,YYYY').toDate();
-
+        // Send only the flag. Re-sending the profile fields re-parsed the
+        // server's YYYY-MM-DD birth date with the wrong format (shifting it)
+        // and flagged the profile for re-review.
         await ApiServices.updateUserInfo({
           search_visibility: searchVisible ? 1 : 0,
-          first_name,
-          last_name,
-          gender,
-          date_of_birth: moment(dob).format('YYYY-MM-DD'),
-          interface_language_id,
-          country,
-          city,
-          longitude,
-          latitude,
         });
         updatedUser = {
           ...updatedUser,

@@ -65,6 +65,7 @@ const ProfileIntroVoice = ({ navigation }: any) => {
   const [uploading, setUploading] = useState(false);
   const recordingRef = useRef(false);
   const elapsedRef = useRef(0);
+  const startedAtRef = useRef(0);
   const stoppingRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -143,9 +144,14 @@ const ProfileIntroVoice = ({ navigation }: any) => {
       });
       recordingRef.current = true;
       setRecording(true);
+      // Measure wall-clock time: interval ticks run late on a busy JS thread,
+      // so counting ticks let recordings run past the server's 10 s limit.
+      startedAtRef.current = Date.now();
       timerRef.current = setInterval(() => {
-        elapsedRef.current = Number((elapsedRef.current + 0.1).toFixed(1));
-        setElapsed(elapsedRef.current);
+        elapsedRef.current = Number(
+          ((Date.now() - startedAtRef.current) / 1000).toFixed(1)
+        );
+        setElapsed(Math.min(10, elapsedRef.current));
         if (elapsedRef.current >= 10) void finishRecording();
       }, 100);
     } catch {

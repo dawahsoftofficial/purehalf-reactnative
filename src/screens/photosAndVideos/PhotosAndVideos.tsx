@@ -1,3 +1,4 @@
+import { t } from 'i18next';
 import _ from 'lodash';
 import React, { useCallback, useEffect, useReducer, useState } from 'react';
 import {
@@ -753,14 +754,16 @@ const PhotosAndVideos = (props: any) => {
       (publicPhotos.length === 10 && imagePicker.from === 'public_gallery') ||
       (privatePhotos.length === 10 && imagePicker.from === 'private_gallery')
     ) {
-      flashErrorMessage('You cannot add more than 10 images');
+      flashErrorMessage(LanguageKeys.maxTenImages);
     } else if (images.length !== 0) {
       let newImages: any = [];
       if (imagePicker.from === 'public_gallery') {
         const length = [...publicPhotos, ...images].length;
         if (length > 10) {
           flashErrorMessage(
-            `You cannot add more than 10 images in public gallery you can add ${10 - publicPhotos.length} more images`
+            t(LanguageKeys.maxTenPublicImages, {
+              remaining: 10 - publicPhotos.length,
+            })
           );
         } else {
           publicPhotos.unshift(...images);
@@ -772,7 +775,9 @@ const PhotosAndVideos = (props: any) => {
         const length = [...privatePhotos, ...images].length;
         if (length > 10) {
           flashErrorMessage(
-            `You cannot add more than 10 images in private gallery you can add ${10 - privatePhotos.length} more images`
+            t(LanguageKeys.maxTenPrivateImages, {
+              remaining: 10 - privatePhotos.length,
+            })
           );
         } else {
           privatePhotos.unshift(...images);
@@ -904,9 +909,9 @@ const PhotosAndVideos = (props: any) => {
 
   const onSavePress = () => {
     if (youtubeURL.length === 0) {
-      flashErrorMessage('No link has been added');
+      flashErrorMessage(LanguageKeys.noLinkAdded);
     } else if (!youtubeURLValidation(youtubeURL)) {
-      flashErrorMessage('Video can only be a YouTube link');
+      flashErrorMessage(LanguageKeys.youtubeLinkOnly);
     } else {
       setLoader({
         visible: true,

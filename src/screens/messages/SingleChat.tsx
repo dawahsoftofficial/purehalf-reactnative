@@ -13,13 +13,16 @@ import {
   AppState,
   type AppStateStatus,
   KeyboardAvoidingView,
+  type LayoutChangeEvent,
   Platform,
+  StatusBar,
   Text,
   TextInput,
   TouchableOpacity,
   View,
   VirtualizedList,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 import pusherService from '@/services/pusher';
@@ -120,6 +123,31 @@ const chatResolutionServices: ChatResolutionServices = {
 };
 
 const SingleChat = (props: any) => {
+  // Android 15+ draws edge-to-edge, so the keyboard avoidance has to be done
+  // in-app. KeyboardAvoidingView compares its parent-relative frame with the
+  // keyboard's screen position, and React Native reports the keyboard without
+  // the navigation bar; add back the parent's offset in the window, the
+  // status bar and the nav-bar inset, or the composer stays half covered.
+  const edgeToEdgeKeyboard =
+    Platform.OS === 'android' && Number(Platform.Version) >= 35;
+  const { bottom: bottomInset } = useSafeAreaInsets();
+  const chatBodyRef = useRef<View>(null);
+  const [chatParentOffset, setChatParentOffset] = useState(0);
+  const onKeyboardAvoidingLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      if (!edgeToEdgeKeyboard) return;
+      const frameY = event.nativeEvent.layout.y;
+      chatBodyRef.current?.measureInWindow((_x, windowY) => {
+        setChatParentOffset(Math.max(0, Math.round(windowY - frameY)));
+      });
+    },
+    [edgeToEdgeKeyboard]
+  );
+  // The window starts below the (non-translucent) status bar while the
+  // keyboard position is reported in screen coordinates, so count it too.
+  const keyboardOffset = edgeToEdgeKeyboard
+    ? chatParentOffset + bottomInset + (StatusBar.currentHeight ?? 0)
+    : 0;
   const Rtl = CheckRtl();
   const flatListRef: any = useRef(null);
   const inputRef: any = useRef(null);
@@ -1655,11 +1683,17 @@ const SingleChat = (props: any) => {
         setMessages={setMessages}
       />
       <NotificationPermissionBanner />
+      {/* 'padding' on Android too: from Android 15 apps are edge-to-edge and
+          adjustResize no longer shrinks the window, so the composer sat
+          behind the keyboard. Where the window still resizes (older
+          Android), the computed padding is 0 and the offset is 0. */}
       <KeyboardAvoidingView
         style={Styles.keyboardAvoidingView}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
+        keyboardVerticalOffset={keyboardOffset}
+        onLayout={onKeyboardAvoidingLayout}
       >
-        <View style={Styles.innerContainer}>
+        <View ref={chatBodyRef} style={Styles.innerContainer}>
           {/* Typing Indicator */}
           {isOtherUserTyping && (
             <TypingIndicator userName={otherUserData?.name} />

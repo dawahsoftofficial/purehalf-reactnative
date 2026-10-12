@@ -234,7 +234,7 @@ function ProfilePicture(props: ProfilePictureProps) {
               updateCurrentUser(user);
               await setData(storageKeys.USER, user);
 
-              flashSuccessMessage('Profile Picture Updated');
+              flashSuccessMessage(LanguageKeys.profilePictureUpdated);
               setImage(resizedImageObj.uri);
               resetUploadState();
             })

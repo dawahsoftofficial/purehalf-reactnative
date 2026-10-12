@@ -465,6 +465,23 @@ const Header = ({
       const requiredCredits = 50;
 
       if (chatCredits < requiredCredits) {
+        // The cached balance can be stale (credits granted by support, a
+        // purchase on another device), so ask the server before the paywall.
+        try {
+          const latestUser =
+            (await ApiServices.getCurrentUserDetail()) as unknown as User;
+          if (latestUser) {
+            updateCurrentUser(latestUser);
+            const latestCredits =
+              (latestUser as { chat_credits?: number })?.chat_credits ?? 0;
+            if (latestCredits >= requiredCredits) {
+              navigateToChat();
+              return;
+            }
+          }
+        } catch (error) {
+          console.error('Error refreshing chat credits:', error);
+        }
         // User doesn't have enough credits, show paywall
         try {
           const result = await presentChatCreditsPaywall();
@@ -479,25 +496,23 @@ const Header = ({
               if (refreshedCredits >= requiredCredits) {
                 navigateToChat();
               } else {
-                flashErrorMessage(
-                  'You need a chat bundle to start a new conversation.'
-                );
+                flashErrorMessage(LanguageKeys.chatBundleRequired);
               }
             } catch (error) {
               console.error('Error refreshing user data:', error);
-              flashErrorMessage(
-                'Failed to refresh your chats. Please try again.'
-              );
+              flashErrorMessage(LanguageKeys.refreshChatsFailed);
             }
           } else if (
             result.error &&
             result.error !== 'Purchase cancelled by user'
           ) {
-            flashErrorMessage(result.error || 'Failed to purchase chat bundle');
+            flashErrorMessage(
+              result.error || LanguageKeys.chatCreditsPurchaseError
+            );
           }
         } catch (error) {
           console.error('Error presenting chat credits paywall:', error);
-          flashErrorMessage('Failed to open chat bundles');
+          flashErrorMessage(LanguageKeys.openChatBundlesFailed);
         }
         return;
       }
