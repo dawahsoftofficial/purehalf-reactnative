@@ -101,7 +101,7 @@ const getFilterItemLabel = (id: any) => {
     case 'is_job':
       return LanguageKeys.jobS;
     case 'sect_id':
-      return LanguageKeys.sect;
+      return LanguageKeys.sectFilter;
     case 'weight':
       return LanguageKeys.weight;
     case 'is_wali':

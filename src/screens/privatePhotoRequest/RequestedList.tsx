@@ -24,7 +24,11 @@ import {
 import { Constants, hp, Typography, wp } from '../../global';
 import { CheckRtl, LanguageKeys } from '../../languages';
 import { Colors, Fonts, Images } from '../../res';
-import { ApiServices, flashSuccessMessage } from '../../services';
+import {
+  ApiServices,
+  capitalizeName,
+  flashSuccessMessage,
+} from '../../services';
 
 const RequestedList = (props: any) => {
   const Rtl = CheckRtl();
@@ -89,7 +93,7 @@ const RequestedList = (props: any) => {
           }}
           numberOfLines={2}
         >
-          {item?.full_name}
+          {capitalizeName(item?.full_name)}
         </ReactText>
         {(item?.city || item?.country) && (
           <ReactText

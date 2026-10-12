@@ -681,6 +681,7 @@ const Keys = {
   plusSize: 'plusSize',
   short: 'short',
   sect: 'sect',
+  sectFilter: 'sectFilter',
   candidateIs: 'candidateIs',
   bornMuslim: 'bornMuslim',
   convertRevert: 'convertRevert',
