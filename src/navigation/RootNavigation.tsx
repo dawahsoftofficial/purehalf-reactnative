@@ -53,6 +53,7 @@ import {
   Profile,
   ProfileIntroVideo,
   ProfileIntroVoice,
+  ProfilePdfShare,
   ProfilePicture,
   PurposeOfLeaving,
   SearchProfiles,
@@ -278,6 +279,7 @@ function App() {
           <Stack.Screen name="SignupStepRadio" component={SignupStepRadio} />
           <Stack.Screen name="EditProfileGroup" component={EditProfileGroup} />
           <Stack.Screen name="EditInterests" component={EditInterests} />
+          <Stack.Screen name="ProfilePdfShare" component={ProfilePdfShare} />
           <Stack.Screen name="TesterConsole" component={TesterConsole} />
           <Stack.Screen name="TesterDirectory" component={TesterDirectory} />
           <Stack.Screen name="TesterScreenInfo" component={TesterScreenInfo} />

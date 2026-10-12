@@ -21,6 +21,7 @@ import {
   useGlobalContext,
 } from '../../services';
 import type { UserMedia } from '../../services/api/types/user-types';
+import { useSettingsStore } from '../../stores';
 import PolygamyBadge from './components/polygamy-badge';
 import ProfileIntroMedia from './components/profile-intro-media';
 import Header from './Header';
@@ -39,6 +40,7 @@ import {
   type GroupMeta,
   InterestsPreview,
   SectionLabel,
+  SharePdfRow,
 } from './profile-hub';
 import { type ProfileFieldVisibility } from './profile-privacy';
 import Styles from './Styles';
@@ -217,6 +219,12 @@ const Profile = ({
   const onEditInterests = useCallback(() => {
     navigation.navigate('EditInterests', { data: interestAndHobbies });
   }, [navigation, interestAndHobbies]);
+
+  const onSharePdf = useCallback(() => {
+    navigation.navigate('ProfilePdfShare');
+  }, [navigation]);
+
+  const profilePdfEnabled = useSettingsStore((s) => s.getProfilePdfEnabled());
 
   const getAttribute = useCallback(
     async (Data: any, nextUserData: User) => {
@@ -574,6 +582,9 @@ const Profile = ({
                         gender={userData?.detail?.gender ?? userData?.gender}
                         onOpenGroup={onOpenGroup}
                       />
+                      {profilePdfEnabled ? (
+                        <SharePdfRow onPress={onSharePdf} />
+                      ) : null}
                       <View style={{ height: 28 }} />
                     </>
                   ) : userData?.profile_restricted ? (

@@ -1360,6 +1360,54 @@ class GApiServices {
     });
   };
 
+  /**
+   * Generate the member's own profile as a branded PDF. Toggles control
+   * whether the member's photo and wali contact details are included —
+   * both default to false server-side when omitted.
+   * @returns Promise resolving to { pdf_base64, filename, reference, generated_at }
+   */
+  getProfilePdf = (
+    includePhoto: boolean,
+    includeWali: boolean
+  ): Promise<{
+    pdf_base64: string;
+    filename: string;
+    reference: string;
+    generated_at: string;
+  }> => {
+    return new Promise((resolve, reject) => {
+      Api.post(EndPoints.profilePdf, {
+        include_photo: includePhoto,
+        include_wali: includeWali,
+      })
+        .then((response) => {
+          const data = response?.data;
+          if (data?.error === false && data?.results) {
+            resolve(data.results);
+          } else {
+            const errorMessage = data?.message || 'Failed to generate PDF';
+            console.error(
+              '[ApiServices.getProfilePdf] API returned error:',
+              errorMessage
+            );
+            reject(errorMessage);
+          }
+        })
+        .catch((error) => {
+          const errorMessage =
+            error?.response?.data?.message ||
+            error?.message ||
+            'Failed to generate PDF';
+          console.error('[ApiServices.getProfilePdf] Error:', {
+            message: errorMessage,
+            status: error?.response?.status,
+            data: error?.response?.data,
+          });
+          reject(errorMessage);
+        });
+    });
+  };
+
   deleteSearchFilter = (id: any) => {
     return new Promise((resolve, reject) => {
       Api.delete(`${EndPoints.searchFilter}/${id}/delete`)
