@@ -12,6 +12,8 @@ class GStorageManager {
     IS_LOGGED_IN: 'IS_LOGGED_IN',
     USER_TOKEN: 'USER_TOKEN',
     FCM_TOKEN: 'FCM_TOKEN',
+    // The last token the backend confirmed (see ApiServices.syncFcmToken).
+    FCM_TOKEN_UPLOADED: 'FCM_TOKEN_UPLOADED',
     ATTRIBUTE: 'ATTRIBUTE',
     PROFILE_DETAIL_LOCAL: 'PROFILE_DETAIL_LOCAL',
     CONVERSATIONS: 'CONVERSATIONS',

@@ -326,8 +326,8 @@ const SignupPrimer = ({ navigation }: any) => {
     const age = answers.partner_age ?? {};
     const lead =
       gender === 'female'
-        ? "They're here, and they're serious. Your wali can be part of every conversation — you're always in control."
-        : 'Start with respect. Every match keeps her family in the loop — the way it should be.';
+        ? "They're here, and they're serious. You're always in control."
+        : 'Start with respect. Sincere, marriage-minded women are waiting.';
     const subject =
       gender === 'female'
         ? 'practising, marriage-minded men match what you’re looking for'

@@ -17,6 +17,10 @@ import {
 import { CheckRtl } from '../languages';
 import DisplayForegroundNotificaton from '../notifications/DisplayForegroundNotificaton';
 import {
+  flushPendingPush,
+  registerPushNavigator,
+} from '../notifications/pendingPush';
+import {
   AccountDeleted,
   AccountDeletion,
   AccountSuspended,
@@ -86,6 +90,17 @@ import BottomTab from './BottomTab';
 const Stack = createNativeStackNavigator();
 
 export const navigationRef = createNavigationContainerRef();
+
+// Lets push taps (cold start included) navigate once the tree is ready.
+registerPushNavigator({
+  isReady: () => navigationRef.isReady(),
+  navigate: (name, params) =>
+    (navigationRef.navigate as (name: string, params?: object) => void)(
+      name,
+      params
+    ),
+  getRootState: () => navigationRef.getRootState(),
+});
 
 function App() {
   const Rtl = CheckRtl();
@@ -157,16 +172,18 @@ function App() {
   return (
     <NavigationContainer
       ref={navigationRef}
-      onReady={() =>
+      onReady={() => {
         TesterDiagnostics.setCurrentScreen(
           navigationRef.getCurrentRoute()?.name
-        )
-      }
-      onStateChange={() =>
+        );
+        flushPendingPush();
+      }}
+      onStateChange={() => {
         TesterDiagnostics.setCurrentScreen(
           navigationRef.getCurrentRoute()?.name
-        )
-      }
+        );
+        flushPendingPush();
+      }}
     >
       <DisplayForegroundNotificaton />
       <CustomModal />

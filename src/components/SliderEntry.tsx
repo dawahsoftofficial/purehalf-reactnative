@@ -87,13 +87,6 @@ const SliderEntry = ({
   const displayFont = Rtl ? Fonts.APPFONT_B : Fonts.DISPLAY;
   const { currentUser } = useGlobalContext();
   const navigation: any = useNavigation();
-  // Existing-conversation detection was dropped with the Firebase RTDB removal.
-  // SingleChat ignores route conversationData without a numeric id and resolves
-  // (or creates) the conversation via the REST API on first send.
-  const [userConversation] = useState({
-    convDetails: {},
-    messages: [],
-  });
   const [profileImageLoader, setProfileImageLoader] = useState(false);
   const [profileImageError, setProfileImageError] = useState(false);
   const [matchingData, setMatchingData] = useState<any>([]);
@@ -178,7 +171,8 @@ const SliderEntry = ({
     onPress();
     navigation.navigate('SingleChat', {
       otherUserData: chatUserData,
-      conversationData: userConversation,
+      // SingleChat looks up the existing conversation (if any) by user id.
+      userId: chatUserData.id,
       fromProfile: true,
     });
   };

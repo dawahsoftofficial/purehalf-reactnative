@@ -20,7 +20,6 @@ import {
   StorageManager,
   useGlobalContext,
 } from '../../services';
-import messageServices from '../../services/api/message-services';
 import type { UserMedia } from '../../services/api/types/user-types';
 import { useSettingsStore } from '../../stores';
 import PolygamyBadge from './components/polygamy-badge';
@@ -82,10 +81,6 @@ type User = {
   media?: Partial<UserMedia>;
 };
 
-type Conversation = {
-  id?: string;
-};
-
 type ProfileProps = {
   navigation: any;
   route?: { params?: { scrollTo?: number } };
@@ -106,11 +101,6 @@ const Profile = ({
   const [tagLineInputVisible, setTagLineInputVisible] = useState(false);
   const [tagLineInput, setTagLineInput] = useState('');
   const [error, setError] = useState<boolean>(false);
-  // Existing-conversation detection was dropped with the Firebase RTDB removal.
-  // The interaction-level block (interactionAction) is the real block; the
-  // conversation-pivot block sync below only runs when a conversation id is
-  // known, which no longer happens from the profile screen.
-  const [userConversation] = useState<Conversation | null>(null);
 
   const [loader, setLoader] = useState<LoaderState>({
     visible: true,
@@ -448,18 +438,8 @@ const Profile = ({
       };
       ApiServices.interactionAction(params)
         .then(() => {
-          // Keep the REST conversation pivot (the gate sendMessage() actually
-          // checks) in sync with the interaction-level block. Replaces the
-          // legacy Firebase RTDB block flag, which never touched the pivot.
+          // The server syncs the chat block flags from this profile block.
           const willBlock = !isBlockedByYou;
-          const convId = Number(userConversation?.id);
-          const targetId = Number(userData?.id);
-          if (convId && targetId) {
-            (willBlock
-              ? messageServices.blockConversationParticipant(convId, targetId)
-              : messageServices.unblockConversationParticipant(convId, targetId)
-            ).catch(() => {});
-          }
           flashSuccessMessage(
             willBlock ? LanguageKeys.blocked : LanguageKeys.unBlocked
           );
@@ -483,15 +463,8 @@ const Profile = ({
       };
       ApiServices.interactionAction(params)
         .then(() => {
-          // Block-and-report is always a block action; mirror it onto the REST
-          // conversation pivot so chat delivery is actually gated.
-          const convId = Number(userConversation?.id);
-          const targetId = Number(userData?.id);
-          if (convId && targetId) {
-            messageServices
-              .blockConversationParticipant(convId, targetId)
-              .catch(() => {});
-          }
+          // Block-and-report is always a block; the server syncs the chat
+          // block flags.
           flashSuccessMessage(LanguageKeys.blocked);
           const nextUser = { ...userData, blocked: 1 };
           setIsBlockedByYou(true);

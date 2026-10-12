@@ -14,6 +14,10 @@ import axios from 'axios';
 import Purchases from 'react-native-purchases';
 
 import { LanguageKeys } from '../../languages';
+import {
+  fcmTokenForUpload,
+  isUsableFcmToken,
+} from '../../notifications/fcmToken';
 import { isIOS } from '../CommonServices';
 import { Firebase } from '../firebase';
 import { flashErrorMessage, flashSuccessMessage } from '../FlashMessages';
@@ -21,6 +25,7 @@ import { StorageManager } from '../storageManager';
 import BaseUrl from './BaseUrl';
 import EndPoints from './EndPoints';
 import { Api } from './Middleware';
+import { buildPhoneAuthPayload } from './phone-auth';
 import type {
   CurrentUserDetail,
   GetCurrentUserDetailResponse,
@@ -96,6 +101,40 @@ class GApiServices {
       return 'FcmToken';
     }
   }
+  /**
+   * Registers this device's FCM token with the backend for the signed-in
+   * member (token rotated, or notification permission just granted).
+   * Never uploads the 'FcmToken' placeholder / an empty token, and does
+   * nothing when nobody is signed in. Best-effort: never throws.
+   * @param knownToken - A token already in hand (e.g. from onTokenRefresh)
+   * @returns Whether a token was uploaded
+   */
+  syncFcmToken = async (knownToken?: string | null): Promise<boolean> => {
+    try {
+      const sessionToken = await getData(storageKeys.USER_TOKEN);
+      if (!sessionToken) return false;
+
+      const token = isUsableFcmToken(knownToken)
+        ? knownToken
+        : await Firebase.getFcmToken();
+      if (!isUsableFcmToken(token)) return false;
+
+      await setData(storageKeys.FCM_TOKEN, token);
+      await Api.post(EndPoints.updateFcmToken, {
+        fcm_token: token,
+        device_type: !isIOS ? 0 : 1,
+      });
+      await setData(storageKeys.FCM_TOKEN_UPLOADED, token);
+      return true;
+    } catch (error) {
+      console.log(
+        '[syncFcmToken] Could not upload FCM token:',
+        error instanceof Error ? error.message : String(error)
+      );
+      return false;
+    }
+  };
+
   socialAuthenticate = (provider: string) => {
     return new Promise(async (resolve, reject) => {
       console.log(
@@ -143,7 +182,7 @@ class GApiServices {
           });
           const requestPayload = {
             firebase_id_token: firebaseIdToken,
-            fcm_token: fcmToken,
+            fcm_token: fcmTokenForUpload(fcmToken),
             device_type: !isIOS ? 0 : 1,
           };
           console.log('[socialAuthenticate] Calling API with payload:', {
@@ -313,7 +352,7 @@ class GApiServices {
 
             const requestPayload = {
               firebase_id_token: firebaseIdToken,
-              fcm_token: fcmToken,
+              fcm_token: fcmTokenForUpload(fcmToken),
               device_type: !isIOS ? 0 : 1,
             };
 
@@ -510,11 +549,28 @@ class GApiServices {
   loginUser = async (phoneNumber: any, onLogin: any) => {
     return new Promise(async (resolve, reject) => {
       const fcmToken = await this.getValidFcmToken();
-      Api.post(EndPoints.authenticate, {
-        phone_number: phoneNumber,
-        fcm_token: fcmToken,
-        device_type: !isIOS ? 0 : 1,
-      })
+      // The server requires the Firebase ID token as proof the number was
+      // verified; without it /authenticate returns 401 and the 401 handler
+      // sends the member back to the login screen.
+      let firebaseIdToken: string;
+      try {
+        if (!auth.currentUser) throw new Error('No Firebase user after OTP');
+        firebaseIdToken = await getIdToken(auth.currentUser, true);
+      } catch (error) {
+        console.log('error while reading Firebase ID token =>', error);
+        flashErrorMessage();
+        reject('');
+        return;
+      }
+      Api.post(
+        EndPoints.authenticate,
+        buildPhoneAuthPayload({
+          phoneNumber,
+          firebaseIdToken,
+          fcmToken,
+          isIOS,
+        })
+      )
         .then(async (apiRes: any) => {
           const apiResult = apiRes?.data?.results;
           await setData(storageKeys.USER, apiResult);
@@ -769,6 +825,7 @@ class GApiServices {
     return new Promise(async (resolve, reject) => {
       // const fcmToken = await getData(storageKeys.FCM_TOKEN)
       const fcmToken = await this.getValidFcmToken();
+      // Logout requires the field; the placeholder just deletes nothing.
       Api.post(EndPoints.logout, {
         fcm_token: fcmToken,
       })

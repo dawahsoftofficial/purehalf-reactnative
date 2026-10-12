@@ -15,6 +15,8 @@ export type Participant = {
   last_seen_at: string | null;
   last_read_message_id: number | null;
   unread_count: number;
+  /** True when the member's account is gone (name/image come from a snapshot). */
+  is_deleted?: boolean;
 };
 
 /**
@@ -68,6 +70,12 @@ export type Conversation = {
   last_message_at: string;
   participants: Participant[];
   last_message_detail: LastMessageDetail | null;
+  /**
+   * Only on the `start` response: true when this call created the
+   * conversation, false when it appended to an existing one. Absent on older
+   * servers.
+   */
+  created?: boolean;
 };
 
 /**
@@ -89,10 +97,34 @@ export type StartConversationResponse = {
 };
 
 /**
+ * Get Conversation With User Response
+ * `results` is null when the caller has no private conversation with the member.
+ */
+export type GetConversationWithUserResponse = {
+  message: string;
+  error: boolean;
+  code: number;
+  results: Conversation | null;
+};
+
+/**
+ * Get Conversation Response
+ * A single conversation the caller participates in (403 FORBIDDEN otherwise).
+ */
+export type GetConversationResponse = {
+  message: string;
+  error: boolean;
+  code: number;
+  results: Conversation;
+};
+
+/**
  * Get Conversations List Query Parameters
  */
 export type GetConversationsListParams = {
   per_page?: number;
+  /** 1-based page number (the list has no total; page until a short page). */
+  page?: number;
 };
 
 /**
@@ -218,6 +250,11 @@ export type MessageSentEventData = {
     created_at: string;
     statuses?: MessageStatus[];
     audio?: MessageAudio | null;
+    /**
+     * True when the server shortened `body` to stay under Pusher's 10KB
+     * payload limit; fetch the message list for the full text.
+     */
+    truncated?: boolean;
   };
   conversation: {
     id: number;
