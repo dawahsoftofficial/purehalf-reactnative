@@ -11,6 +11,7 @@ const Keys = {
   resendOtp: 'resendOtp',
   seconds: 'seconds',
   resendCode: 'resendCode',
+  resendCodeIn: 'resendCodeIn',
   emailSent: 'emailSent',
   smsSent: 'smsSent',
   enterVerification: 'enterVerification',
