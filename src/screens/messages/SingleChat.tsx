@@ -1655,9 +1655,13 @@ const SingleChat = (props: any) => {
         setMessages={setMessages}
       />
       <NotificationPermissionBanner />
+      {/* 'padding' on Android too: from Android 15 apps are edge-to-edge and
+          adjustResize no longer shrinks the window, so the composer sat
+          behind the keyboard. Where the window still resizes, the computed
+          padding is 0. */}
       <KeyboardAvoidingView
         style={Styles.keyboardAvoidingView}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
       >
         <View style={Styles.innerContainer}>
           {/* Typing Indicator */}
