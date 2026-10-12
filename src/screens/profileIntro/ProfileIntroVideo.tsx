@@ -71,7 +71,7 @@ const ProfileIntroVideo = ({ navigation }: any) => {
           return;
         }
         if ((selected.duration ?? 0) > 10.5) {
-          flashErrorMessage('Please record a video no longer than 10 seconds.');
+          flashErrorMessage(LanguageKeys.videoTooLong);
           return;
         }
         setAsset(selected);

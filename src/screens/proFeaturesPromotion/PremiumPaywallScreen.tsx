@@ -510,7 +510,7 @@ export default function PremiumPaywallScreen({
   const handleSubscribe = async (pkg?: PurchasesPackage) => {
     const packageToPurchase = pkg || selected;
     if (!packageToPurchase) {
-      flashErrorMessage('Please select a package to subscribe');
+      flashErrorMessage(LanguageKeys.selectPackageToSubscribe);
       return;
     }
 
@@ -526,9 +526,7 @@ export default function PremiumPaywallScreen({
         await handlePurchaseSuccess(customerInfo, packageToPurchase);
       } else {
         hideLoaderModal();
-        flashErrorMessage(
-          'Subscription purchase completed but could not be verified. Please try restoring purchases.'
-        );
+        flashErrorMessage(LanguageKeys.subscriptionNotVerified);
       }
     } catch (error: any) {
       hideLoaderModal();

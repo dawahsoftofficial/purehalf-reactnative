@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Dimensions, Image, Keyboard, StyleSheet, View } from 'react-native';
 import Ripple from 'react-native-material-ripple';
 import {
@@ -30,6 +31,12 @@ import {
 import messageServices from '../../services/api/message-services';
 import type { Message } from '../../services/api/types/message-types';
 import { chatErrorMessageKey } from './chat-error-messages';
+import {
+  buildChatHeaderOptions,
+  CHAT_HEADER_OPTION_LABELS,
+  type ChatHeaderOptionId,
+  isDestructiveChatHeaderOption,
+} from './chat-header-options';
 
 type SingleChatHeaderProps = {
   navigation: any;
@@ -61,6 +68,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
     isPartnerDeleted = false,
     setMessages,
   } = props;
+  const { t } = useTranslation();
 
   const isSupportConversation =
     conversationData?.type === 'support' || otherUserData?.type === 'Admin';
@@ -79,7 +87,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
   });
   const [modalLoader, setModalLoader] = useState({
     visible: false,
-    message: 'Loading...',
+    message: LanguageKeys.loading,
   });
 
   const onBackPress = () => navigation.goBack();
@@ -115,7 +123,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
   const onBlockUnBlockUserPress = async () => {
     menuRef.current?.close();
     if (!conversationId) {
-      flashErrorMessage('Conversation ID is missing');
+      flashErrorMessage();
       return;
     }
 
@@ -163,7 +171,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
   const onBlockUnBlockAndReportUserPress = async () => {
     menuRef.current?.close();
     if (!conversationId) {
-      flashErrorMessage('Conversation ID is missing');
+      flashErrorMessage();
       return;
     }
 
@@ -219,7 +227,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
     hideDeleteAlert();
 
     if (!conversationId) {
-      flashErrorMessage('Conversation ID is missing');
+      flashErrorMessage();
       return;
     }
 
@@ -268,7 +276,7 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
     hideDeleteAlert();
 
     if (!conversationId) {
-      flashErrorMessage('Conversation ID is missing');
+      flashErrorMessage();
       return;
     }
 
@@ -325,108 +333,28 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
         fetchData();
         flashSuccessMessage(
           isBlurred
-            ? 'Photo Unblurred Successfully'
-            : 'Photo Blurred Successfully'
+            ? LanguageKeys.photoUnblurredSuccessfully
+            : LanguageKeys.photoBlurredSuccessfully
         );
       })
       .catch(hideModalLoader);
   };
 
-  let optionsArray: string[] = [];
-  const blurText = isBlurred
-    ? 'Unblur Profile Picture'
-    : 'Blur Profile Picture';
-  const hideProfileActions = isSupportConversation || isPartnerDeleted;
-  const viewProfileOption = hideProfileActions ? [] : ['View profile'];
-  const viewProfileAction = hideProfileActions ? [] : [onViewProfilePress];
-  if (isPartnerDeleted) {
-    // A deleted member can't be blocked or viewed; only local cleanup remains.
-    optionsArray = hasConversation
-      ? ['Clear chat', 'Delete conversation', 'Cancel']
-      : ['Clear chat', 'Cancel'];
-  } else if (!hasConversation) {
-    if (isBlockedByYou) {
-      optionsArray = [
-        ...viewProfileOption,
-        'Unblock user',
-        'Clear chat',
-        // blurText,
-        'Cancel',
-      ];
-    } else {
-      optionsArray = [
-        ...viewProfileOption,
-        'Block user',
-        'Report and block user',
-        'Clear chat',
-        // blurText,
-        'Cancel',
-      ];
-    }
-  } else {
-    if (isBlockedByYou) {
-      optionsArray = [
-        ...viewProfileOption,
-        'Unblock user',
-        'Clear chat',
-        'Delete conversation',
-        // blurText,
-        'Cancel',
-      ];
-    } else {
-      optionsArray = [
-        ...viewProfileOption,
-        'Block user',
-        'Report and block user',
-        'Clear chat',
-        'Delete conversation',
-        // blurText,
-        'Cancel',
-      ];
-    }
-  }
+  const menuOptions = buildChatHeaderOptions({
+    hideProfileActions: isSupportConversation || isPartnerDeleted,
+    isPartnerDeleted,
+    hasConversation,
+    isBlockedByYou,
+  });
 
-  let actionsArray: Array<() => void> = [];
-  if (isPartnerDeleted) {
-    actionsArray = hasConversation
-      ? [showClearChatAlert, showDeleteChatAlert]
-      : [showClearChatAlert];
-  } else if (!hasConversation) {
-    if (isBlockedByYou) {
-      actionsArray = [
-        ...viewProfileAction,
-        onBlockUnBlockUserPress,
-        showClearChatAlert,
-        // onChangeBlur,
-      ];
-    } else {
-      actionsArray = [
-        ...viewProfileAction,
-        onBlockUnBlockUserPress,
-        onBlockUnBlockAndReportUserPress,
-        showClearChatAlert,
-      ];
-    }
-  } else {
-    if (isBlockedByYou) {
-      actionsArray = [
-        ...viewProfileAction,
-        onBlockUnBlockUserPress,
-        showClearChatAlert,
-        showDeleteChatAlert,
-        // onChangeBlur,
-      ];
-    } else {
-      actionsArray = [
-        ...viewProfileAction,
-        onBlockUnBlockUserPress,
-        onBlockUnBlockAndReportUserPress,
-        showClearChatAlert,
-        showDeleteChatAlert,
-        // onChangeBlur,
-      ];
-    }
-  }
+  const menuActions: Record<ChatHeaderOptionId, () => void> = {
+    viewProfile: onViewProfilePress,
+    block: onBlockUnBlockUserPress,
+    unblock: onBlockUnBlockUserPress,
+    reportAndBlock: onBlockUnBlockAndReportUserPress,
+    clearChat: showClearChatAlert,
+    deleteConversation: showDeleteChatAlert,
+  };
 
   return (
     <View style={Styles.headerContainer}>
@@ -502,38 +430,21 @@ const SingleChatHeader = (props: SingleChatHeaderProps) => {
             </View>
           </MenuTrigger>
           <MenuOptions optionsContainerStyle={Styles.menuOptionsContainer}>
-            {optionsArray.map((option, index) => {
-              // Skip "Cancel" option (last item)
-              if (option === 'Cancel') {
-                return null;
-              }
-
-              // Get the corresponding action (actionsArray has same length as optionsArray minus Cancel)
-              // Since Cancel is always last, the index matches for all other items
-              const action = actionsArray[index];
-
-              // Check if this is a destructive action
-              const isDestructive =
-                option === 'Delete conversation' || option === 'Clear chat';
-
-              return (
-                <MenuOption
-                  key={`${option}-${index}`}
-                  onSelect={() => {
-                    menuRef.current?.close();
-                    if (action) {
-                      action();
-                    }
-                  }}
-                  text={option}
-                  customStyles={{
-                    optionText: isDestructive
-                      ? Styles.menuTextDestructive
-                      : Styles.menuText,
-                  }}
-                />
-              );
-            })}
+            {menuOptions.map((option) => (
+              <MenuOption
+                key={option}
+                onSelect={() => {
+                  menuRef.current?.close();
+                  menuActions[option]();
+                }}
+                text={t(CHAT_HEADER_OPTION_LABELS[option])}
+                customStyles={{
+                  optionText: isDestructiveChatHeaderOption(option)
+                    ? Styles.menuTextDestructive
+                    : Styles.menuText,
+                }}
+              />
+            ))}
           </MenuOptions>
         </Menu>
       )}

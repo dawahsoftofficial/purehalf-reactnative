@@ -74,7 +74,7 @@ const saveAndSearch = (
     onSearch(ageRange, filtersDataList, nameQuery)
       .then((res) => {
         if (Object.keys(params?.apply).length === 0) {
-          flashErrorMessage('Please select atleast 1 filter');
+          flashErrorMessage(LanguageKeys.selectAtLeastOneFilter);
           reject('');
         } else {
           ApiServices.saveSearchFilter(params)
