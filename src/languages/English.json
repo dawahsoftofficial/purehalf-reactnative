@@ -143,6 +143,7 @@
     "helpAndSupport": "Help and Support",
     "deleteAccount": "Delete account",
     "logOut": "Log Out",
+    "logOutConfirm": "Are you sure you want to log out?",
     "updating": "Updating...",
     "firstName": "First Name",
     "enterFirstName": "First name",

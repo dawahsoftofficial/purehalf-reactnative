@@ -282,6 +282,7 @@ const Keys = {
   membershipInformation: 'membershipInformation',
   rateApp: 'rateApp',
   logOut: 'logOut',
+  logOutConfirm: 'logOutConfirm',
   update: 'update',
   blockedContacts: 'blockedContacts',
   requestedOn: 'requestedOn',
