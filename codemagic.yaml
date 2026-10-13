@@ -1,0 +1,120 @@
+# Codemagic CI: release builds for Pure Half (React Native 0.82, bare workflow).
+#
+# Both workflows are started manually from the Codemagic dashboard (no
+# automatic triggers) so build minutes are only spent when a release is wanted.
+#
+# One-time setup in Codemagic (see docs/ci/codemagic-setup.md):
+#   - Environment variable group `app_env` with secure variable APP_ENV_FILE_B64:
+#     the production .env file, base64-encoded (APP_DEBUG is forced to false).
+#   - Android keystore uploaded under Team settings > Code signing identities,
+#     reference name `purehalf_upload` (the Play upload key).
+#   - App Store Connect API key integration named `pure_half_asc` (iOS only),
+#     and variable APP_STORE_APPLE_ID in group `ios_release` (the app's
+#     numeric Apple ID from App Store Connect).
+
+definitions:
+  write_env: &write_env
+    name: Write .env from the app_env group
+    script: |
+      set -e
+      if [ -z "$APP_ENV_FILE_B64" ]; then
+        echo "APP_ENV_FILE_B64 is not set (variable group app_env)" >&2
+        exit 1
+      fi
+      echo "$APP_ENV_FILE_B64" | base64 --decode > .env
+      # Release builds must never ship the debug "Delete Test Account" row.
+      sed -i.bak '/^APP_DEBUG=/d' .env && rm -f .env.bak
+      echo "APP_DEBUG=false" >> .env
+      echo "API base: $(grep '^API_BASE_URL=' .env | cut -d= -f2-)"
+  install_js: &install_js
+    name: Install JavaScript dependencies
+    script: yarn install --frozen-lockfile
+
+workflows:
+  android-release:
+    name: Android release (Play upload bundle)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      groups:
+        - app_env
+      android_signing:
+        - purehalf_upload
+      node: 20
+      java: 17
+    scripts:
+      - *write_env
+      - *install_js
+      - name: Release env check
+        script: yarn check:release-env
+      - name: Build signed AAB
+        script: |
+          set -e
+          cd android
+          # Signing comes from the Codemagic keystore, passed on the command
+          # line so it overrides the values in android/gradle.properties.
+          ./gradlew bundleRelease \
+            -PMYAPP_UPLOAD_STORE_FILE="$CM_KEYSTORE_PATH" \
+            -PMYAPP_UPLOAD_STORE_PASSWORD="$CM_KEYSTORE_PASSWORD" \
+            -PMYAPP_UPLOAD_KEY_ALIAS="$CM_KEY_ALIAS" \
+            -PMYAPP_UPLOAD_KEY_PASSWORD="$CM_KEY_PASSWORD"
+      - name: Refuse a debug-signed bundle
+        script: |
+          set -e
+          AAB=android/app/build/outputs/bundle/release/app-release.aab
+          # build.gradle silently falls back to the debug key when the upload
+          # keystore is missing; Play would reject that bundle.
+          if keytool -printcert -jarfile "$AAB" | grep -q "CN=Android Debug"; then
+            echo "app-release.aab is signed with the DEBUG key; check the purehalf_upload keystore" >&2
+            exit 1
+          fi
+          keytool -printcert -jarfile "$AAB" | grep -E "Owner:|SHA256:"
+    artifacts:
+      - android/app/build/outputs/bundle/release/*.aab
+      - android/app/build/outputs/mapping/release/mapping.txt
+    # To upload straight to Play's internal testing track, add a Google Cloud
+    # service account with Play Console access as secure variable
+    # GCLOUD_SERVICE_ACCOUNT_CREDENTIALS (group app_env) and uncomment:
+    # publishing:
+    #   google_play:
+    #     credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+    #     track: internal
+    #     submit_as_draft: true
+
+  ios-release:
+    name: iOS release (TestFlight)
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+    integrations:
+      app_store_connect: pure_half_asc
+    environment:
+      groups:
+        - app_env
+        - ios_release
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.zojayn
+      node: 20
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - *write_env
+      - *install_js
+      - name: Install pods
+        script: cd ios && pod install
+      - name: Apply signing profiles
+        script: xcode-project use-profiles
+      - name: Next build number from TestFlight
+        script: |
+          set -e
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" || echo 0)
+          cd ios && agvtool new-version -all $((LATEST + 1))
+      - name: Build IPA
+        script: xcode-project build-ipa --workspace ios/PureHalf.xcworkspace --scheme PureHalf
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
