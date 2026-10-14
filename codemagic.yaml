@@ -30,7 +30,14 @@ definitions:
       echo "API base: $(grep '^API_BASE_URL=' .env | cut -d= -f2-)"
   install_js: &install_js
     name: Install JavaScript dependencies
-    script: yarn install --frozen-lockfile
+    script: |
+      set -e
+      # The lockfile is Yarn 1 (classic). Codemagic images default to Yarn 4,
+      # which rewrites the lockfile and fails, so pin Yarn 1 via Corepack.
+      corepack enable
+      corepack prepare yarn@1.22.22 --activate
+      yarn --version
+      yarn install --frozen-lockfile
 
 workflows:
   android-release:
