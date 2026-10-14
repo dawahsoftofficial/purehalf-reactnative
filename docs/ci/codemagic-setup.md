@@ -37,10 +37,19 @@ Codemagic > **Team settings** > **Code signing identities** > **Android keystore
 
 The workflow refuses to finish if the bundle comes out signed with the debug key.
 
-Optional, to upload straight to Play's internal testing track: create a Google
-Cloud service account with release access in Play Console > Users and permissions,
-add its JSON as secure variable `GCLOUD_SERVICE_ACCOUNT_CREDENTIALS` in group
-`app_env`, and uncomment the `publishing` block in `codemagic.yaml`.
+### Automatic upload to Play open testing
+
+`android-release` publishes every build to the **open testing** track and rolls it out,
+and picks the next `versionCode` from Play automatically. One-time setup:
+
+1. Google Cloud Console (any project) > IAM > Service accounts > create one > Keys >
+   Add key > JSON, and download it. Enable the **Google Play Android Developer API**.
+2. Play Console > Users and permissions > Invite new users > the service account email >
+   app permission for Pure Half with **Release to testing tracks** (and Production if wanted).
+3. Codemagic > Environment variables > `GCLOUD_SERVICE_ACCOUNT_CREDENTIALS` = the whole JSON,
+   group `app_env`, **Secure**.
+4. Play Console > Testing > Open testing must already exist with at least one country and the
+   store listing complete (Play needs this once before API uploads to the track work).
 
 ## 4. iOS (once the Apple account is active)
 

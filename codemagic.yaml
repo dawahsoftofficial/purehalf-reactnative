@@ -8,6 +8,8 @@
 #     the production .env file, base64-encoded (APP_DEBUG is forced to false).
 #   - Android keystore uploaded under Team settings > Code signing identities,
 #     reference name `purehalf_upload` (the Play upload key).
+#   - GCLOUD_SERVICE_ACCOUNT_CREDENTIALS (group app_env): Play service account
+#     key, used to read the latest versionCode and publish to open testing.
 #   - App Store Connect API key integration named `pure_half_asc` (iOS only),
 #     and variable APP_STORE_APPLE_ID in group `ios_release` (the app's
 #     numeric Apple ID from App Store Connect).
@@ -47,6 +49,16 @@ workflows:
       - *install_js
       - name: Release env check
         script: yarn check:release-env
+      - name: Next versionCode from Google Play
+        script: |
+          set -e
+          # Every upload needs a higher versionCode than anything already on Play,
+          # so take the highest across all tracks and add 1 (never below build.gradle's).
+          LATEST=$(google-play get-latest-build-number --package-name com.zojayn || echo 0)
+          CURRENT=$(grep -m1 -oE 'versionCode [0-9]+' android/app/build.gradle | grep -oE '[0-9]+')
+          NEXT=$(( LATEST >= CURRENT ? LATEST + 1 : CURRENT ))
+          echo "Play latest: $LATEST, build.gradle: $CURRENT -> using $NEXT"
+          sed -i.bak -E "s/versionCode [0-9]+/versionCode $NEXT/" android/app/build.gradle && rm -f android/app/build.gradle.bak
       - name: Build signed AAB
         script: |
           set -e
@@ -72,49 +84,12 @@ workflows:
     artifacts:
       - android/app/build/outputs/bundle/release/*.aab
       - android/app/build/outputs/mapping/release/mapping.txt
-    # To upload straight to Play's internal testing track, add a Google Cloud
-    # service account with Play Console access as secure variable
-    # GCLOUD_SERVICE_ACCOUNT_CREDENTIALS (group app_env) and uncomment:
-    # publishing:
-    #   google_play:
-    #     credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
-    #     track: internal
-    #     submit_as_draft: true
-
-  ios-release:
-    name: iOS release (TestFlight)
-    instance_type: mac_mini_m2
-    max_build_duration: 90
-    integrations:
-      app_store_connect: pure_half_asc
-    environment:
-      groups:
-        - app_env
-        - ios_release
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.zojayn
-      node: 20
-      xcode: latest
-      cocoapods: default
-    scripts:
-      - *write_env
-      - *install_js
-      - name: Install pods
-        script: cd ios && pod install
-      - name: Apply signing profiles
-        script: xcode-project use-profiles
-      - name: Next build number from TestFlight
-        script: |
-          set -e
-          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" || echo 0)
-          cd ios && agvtool new-version -all $((LATEST + 1))
-      - name: Build IPA
-        script: xcode-project build-ipa --workspace ios/PureHalf.xcworkspace --scheme PureHalf
-    artifacts:
-      - build/ios/ipa/*.ipa
-      - /tmp/xcodebuild_logs/*.log
+    # Uploads straight to Play's OPEN TESTING track ("beta" in the Play API) and
+    # rolls out to testers. Needs secure variable GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+    # (group app_env): a Google Cloud service account JSON key whose account has
+    # Release permission for Pure Half in Play Console.
     publishing:
-      app_store_connect:
-        auth: integration
-        submit_to_testflight: true
+      google_play:
+        credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+        track: beta
+        submit_as_draft: false
