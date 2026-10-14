@@ -127,7 +127,17 @@ workflows:
       - *write_env
       - *install_js
       - name: Install pods
-        script: cd ios && pod install
+        script: |
+          set -e
+          cd ios
+          # Podfile.lock goes stale when JS packages with native pods are upgraded
+          # without a Mac (e.g. react-native-mmkv -> MMKVCore). Try the locked
+          # versions first; if they no longer match, re-resolve from scratch.
+          if ! pod install --repo-update; then
+            echo "Podfile.lock is out of date; re-resolving pods" >&2
+            rm -f Podfile.lock
+            pod install --repo-update
+          fi
       - name: Apply signing profiles
         script: xcode-project use-profiles
       - name: Next build number from TestFlight
