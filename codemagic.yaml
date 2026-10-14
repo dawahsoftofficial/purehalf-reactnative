@@ -104,3 +104,41 @@ workflows:
         credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
         track: beta
         submit_as_draft: false
+
+  ios-release:
+    name: iOS release (TestFlight)
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+    integrations:
+      app_store_connect: pure_half_asc
+    environment:
+      groups:
+        - app_env
+        - ios_release
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.zojayn
+      node: 20
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - *write_env
+      - *install_js
+      - name: Install pods
+        script: cd ios && pod install
+      - name: Apply signing profiles
+        script: xcode-project use-profiles
+      - name: Next build number from TestFlight
+        script: |
+          set -e
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" || echo 0)
+          cd ios && agvtool new-version -all $((LATEST + 1))
+      - name: Build IPA
+        script: xcode-project build-ipa --workspace ios/PureHalf.xcworkspace --scheme PureHalf
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
