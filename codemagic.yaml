@@ -114,7 +114,9 @@ workflows:
     environment:
       groups:
         - app_env
-        - ios_release
+      vars:
+        # Numeric Apple ID of the PureHalf app in App Store Connect (public, not a secret).
+        APP_STORE_APPLE_ID: "6450672518"
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.zojayn
