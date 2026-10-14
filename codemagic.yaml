@@ -139,7 +139,7 @@ workflows:
             pod install --repo-update
           fi
       - name: Apply signing profiles
-        script: xcode-project use-profiles
+        script: xcode-project use-profiles --project ios/PureHalf.xcodeproj
       - name: Next build number from TestFlight
         script: |
           set -e
