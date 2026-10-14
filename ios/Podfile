@@ -35,5 +35,14 @@ target 'PureHalf' do
       :mac_catalyst_enabled => false,
       # :ccache_enabled => true
     )
+
+    # fmt 11.0.2 (pinned by React Native) fails to compile its consteval code on
+    # Xcode 26.4+ clang. Building it as C++17 disables that code path.
+    installer.pods_project.targets.each do |target|
+      next unless target.name == 'fmt'
+      target.build_configurations.each do |build_config|
+        build_config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++17'
+      end
+    end
   end
 end
