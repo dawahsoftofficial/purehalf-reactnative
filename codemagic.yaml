@@ -16,18 +16,22 @@
 
 definitions:
   write_env: &write_env
-    name: Write .env from the app_env group
+    name: Write .env.production from the app_env group
     script: |
       set -e
       if [ -z "$APP_ENV_FILE_B64" ]; then
         echo "APP_ENV_FILE_B64 is not set (variable group app_env)" >&2
         exit 1
       fi
-      echo "$APP_ENV_FILE_B64" | base64 --decode > .env
+      # Release bundles read .env.production (android/app/build.gradle,
+      # react-native-dotenv envName APP_ENV); .env is kept identical for tools
+      # that still read it.
+      echo "$APP_ENV_FILE_B64" | base64 --decode > .env.production
       # Release builds must never ship the debug "Delete Test Account" row.
-      sed -i.bak '/^APP_DEBUG=/d' .env && rm -f .env.bak
-      echo "APP_DEBUG=false" >> .env
-      echo "API base: $(grep '^API_BASE_URL=' .env | cut -d= -f2-)"
+      sed -i.bak '/^APP_DEBUG=/d' .env.production && rm -f .env.production.bak
+      echo "APP_DEBUG=false" >> .env.production
+      cp .env.production .env
+      echo "API base: $(grep '^API_BASE_URL=' .env.production | cut -d= -f2-)"
   install_js: &install_js
     name: Install JavaScript dependencies
     script: |
