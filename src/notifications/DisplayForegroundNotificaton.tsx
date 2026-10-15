@@ -26,10 +26,11 @@ import {
   StorageManager,
   useGlobalContext,
 } from '../services';
-import { useNotificationStore } from '../stores';
+import { useNotificationStore, usePremiumStore } from '../stores';
 import { shouldClearBannerAfterHide } from './bannerHide';
 import { parsePushData, shouldSuppressChatBanner } from './pushPayload';
 import { routeNotification } from './routeNotification';
+import { showNotificationMembership } from './showNotificationMembership';
 import { usePushHandlers } from './usePushHandlers';
 
 /** How long a foreground banner stays up before hiding itself. */
@@ -234,7 +235,10 @@ const DisplayForegroundNotification = () => {
 
     await routeNotification(navigation, type, {
       data,
+      currentUserId: currentUser?.id,
+      isPremium: usePremiumStore.getState().isPremium(),
       deps: {
+        onMembershipRequired: () => showNotificationMembership(navigation),
         onLogout: onLogoutPress,
         openAppStore,
         onProfilePictureUpdateRequired: async () => {
@@ -277,10 +281,10 @@ const DisplayForegroundNotification = () => {
           ) : null}
           <View style={Styles.nameMsgCon}>
             <Text numberOfLines={2} style={Styles.name}>
-              {remoteMessage?.data?.title}
+              {remoteMessage?.data?.title ?? remoteMessage?.notification?.title}
             </Text>
             <Text numberOfLines={4} style={Styles.message}>
-              {remoteMessage?.data?.body}
+              {remoteMessage?.data?.body ?? remoteMessage?.notification?.body}
             </Text>
           </View>
         </Animated.View>
@@ -299,7 +303,8 @@ const Styles = StyleSheet.create({
     alignSelf: 'center',
     marginHorizontal: wp(8),
     top: 0,
-    zIndex: 1,
+    zIndex: 10000,
+    elevation: 20,
     width: wp(95),
   },
   innerContainer: {

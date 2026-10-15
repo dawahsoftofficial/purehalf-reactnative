@@ -15,15 +15,20 @@ import AntDesign from 'react-native-vector-icons/AntDesign';
 import { Container, Header, Text } from '../../components';
 import { hp, Typography, wp } from '../../global';
 import { openAppStore } from '../../lib/utils/rate-app';
+import { notificationProfileId } from '../../notifications/notificationProfile';
 import { routeNotification } from '../../notifications/routeNotification';
+import { showNotificationMembership } from '../../notifications/showNotificationMembership';
 import { Colors, Fonts } from '../../res';
+import { useGlobalContext } from '../../services';
 import notificationServices from '../../services/api/notification-services';
 import type { AppNotification } from '../../services/api/types/notification-types';
-import { useNotificationStore } from '../../stores';
+import { useNotificationStore, usePremiumStore } from '../../stores';
 
 const PER_PAGE = 20;
 
 const Notifications = ({ navigation }: any) => {
+  const { currentUser } = useGlobalContext();
+  const isPremium = usePremiumStore((state) => state.isPremium);
   const [items, setItems] = useState<AppNotification[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -69,7 +74,7 @@ const Notifications = ({ navigation }: any) => {
   }, [loadingMore, items.length, total, page, load]);
 
   const onItemPress = useCallback(
-    async (item: AppNotification) => {
+    async (item: AppNotification, profileOnly = false) => {
       if (!item.is_read) {
         setItems((prev) =>
           prev.map((n) => (n.id === item.id ? { ...n, is_read: true } : n))
@@ -79,10 +84,16 @@ const Notifications = ({ navigation }: any) => {
       }
       await routeNotification(navigation, item.type, {
         data: item.data,
-        deps: { openAppStore },
+        currentUserId: currentUser?.id,
+        isPremium: isPremium(),
+        profileOnly,
+        deps: {
+          openAppStore,
+          onMembershipRequired: () => showNotificationMembership(navigation),
+        },
       });
     },
-    [navigation, decrement]
+    [navigation, decrement, currentUser?.id, isPremium]
   );
 
   const onDelete = useCallback(
@@ -147,6 +158,18 @@ const Notifications = ({ navigation }: any) => {
           )}
           {!!item.created_at && (
             <Text style={Styles.time}>{moment(item.created_at).fromNow()}</Text>
+          )}
+          {notificationProfileId(item.type, item.data, currentUser?.id) && (
+            <TouchableOpacity
+              accessibilityRole="link"
+              onPress={(event) => {
+                event.stopPropagation();
+                void onItemPress(item, true);
+              }}
+              style={{ marginTop: hp(0.5) }}
+            >
+              <Text style={{ color: Colors.primary }}>View profile</Text>
+            </TouchableOpacity>
           )}
         </View>
         {!item.is_read && <View style={Styles.unreadDot} />}

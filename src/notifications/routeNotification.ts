@@ -1,3 +1,4 @@
+import { notificationProfileId } from './notificationProfile';
 import { buildChatRouteParams } from './pushPayload';
 
 export type NotificationRouteData = {
@@ -10,11 +11,15 @@ export type NotificationRouteDeps = {
   onLogout?: () => void | Promise<void>;
   openAppStore?: () => void | Promise<void>;
   onProfilePictureUpdateRequired?: () => void | Promise<void>;
+  onMembershipRequired?: () => void | Promise<void>;
 };
 
 export type NotificationRouteOptions = {
   data?: NotificationRouteData | null;
   deps?: NotificationRouteDeps;
+  currentUserId?: number | string;
+  isPremium?: boolean;
+  profileOnly?: boolean;
 };
 
 /**
@@ -25,13 +30,39 @@ export type NotificationRouteOptions = {
 export const routeNotification = async (
   navigation: any,
   type: string | null | undefined,
-  { data, deps = {} }: NotificationRouteOptions = {}
+  {
+    data,
+    deps = {},
+    currentUserId,
+    isPremium = false,
+    profileOnly = false,
+  }: NotificationRouteOptions = {}
 ): Promise<void> => {
+  const id = notificationProfileId(type, data, currentUserId);
+  const profileNotification = [
+    'profile_liked',
+    'profile_visited',
+    'someone_liked_your_profile',
+    'profile_visit_notification',
+  ].includes(type ?? '');
+  if (profileOnly || profileNotification) {
+    if (
+      profileNotification &&
+      data?.membership_required === true &&
+      !isPremium
+    ) {
+      await deps.onMembershipRequired?.();
+      return;
+    }
+    if (!id) return;
+    if (!isPremium) {
+      await deps.onMembershipRequired?.();
+      return;
+    }
+    navigation.navigate('UserProfile', { userData: { id } });
+    return;
+  }
   switch (type) {
-    case 'profile_liked':
-    case 'profile_visited':
-      navigation.navigate('UserProfile', { userData: { id: data?.id } });
-      break;
     case 'photo_request_approved':
       navigation.navigate('PrivatePhotoRequest', {
         initialTab: 'yourRequests',

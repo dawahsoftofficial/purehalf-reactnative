@@ -20,9 +20,9 @@ type Props = {
 const ICON_STYLE = { marginLeft: wp(0.5) };
 
 // Ticks always sit on the outgoing (violet) bubble, so the resting colour is a
-// translucent white; a "read" receipt pops in a bright legible blue.
+// translucent white; a "read" receipt pops in a bright legible green.
 const SENT_COLOR = Colors.whiteRGBA90;
-const READ_COLOR = Colors.color25;
+const READ_COLOR = '#4ade80';
 // A failed send is flagged on the (violet) bubble in plain white; the red
 // explanation sits under the bubble.
 const FAILED_COLOR = Colors.color2;
@@ -57,7 +57,7 @@ const MessageStatusIcon = ({
     );
   }
 
-  // Read → blue double tick (preserved even if later blocked)
+  // Read → green double tick (preserved even if later blocked)
   if (isSeen) {
     return (
       <Ionicons
