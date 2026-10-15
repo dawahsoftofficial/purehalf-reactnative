@@ -99,7 +99,7 @@ const MessageBubble = ({
 
   // Determine message status based on delivered_at and read_at
   // Priority: read_at > delivered_at > sending
-  // Note: MessageStatusIcon uses isSeen prop for read status (blue double tick)
+  // Note: MessageStatusIcon uses isSeen prop for read status (green double tick)
   const getMessageStatus = (): MessageDisplayStatus => {
     // An unsent bubble is the sender's own optimistic copy: still going out
     // ('pending', shown as a clock) or not delivered ('failed').
@@ -115,8 +115,8 @@ const MessageBubble = ({
       // If status exists but both delivered_at and read_at are null, show as 'sending' (single tick)
       return 'sending';
     }
-    // For messages being sent or if status is not available
-    return 'sent';
+    // No recipient receipt yet: a single tick, never assume delivery.
+    return 'sending';
   };
 
   const messageStatus = getMessageStatus();
