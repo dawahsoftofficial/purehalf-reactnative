@@ -127,3 +127,45 @@ describe('getProfilePdfEnabled', () => {
     expect(useSettingsStore.getState().getProfilePdfEnabled()).toBe(true);
   });
 });
+
+describe('getSmsOtpProvider', () => {
+  afterEach(() => {
+    useSettingsStore.getState().clearSettings();
+  });
+
+  const withProvider = (value: string) =>
+    useSettingsStore.getState().setSettings({
+      message: 'ok',
+      error: false,
+      code: 200,
+      results: [
+        {
+          title: 'SMS OTP Provider',
+          key: 'sms_otp_provider',
+          type: 'string',
+          value,
+        },
+      ],
+    });
+
+  it('defaults to firebase when the setting is missing', () => {
+    expect(useSettingsStore.getState().getSmsOtpProvider()).toBe('firebase');
+  });
+
+  it('reads sendpk from settings and records when settings loaded', () => {
+    withProvider('sendpk');
+    expect(useSettingsStore.getState().getSmsOtpProvider()).toBe('sendpk');
+    expect(useSettingsStore.getState().loadedAt).toEqual(expect.any(Number));
+  });
+
+  it('treats an unknown value as firebase', () => {
+    withProvider('something-else');
+    expect(useSettingsStore.getState().getSmsOtpProvider()).toBe('firebase');
+  });
+
+  it('clears loadedAt with the settings', () => {
+    withProvider('sendpk');
+    useSettingsStore.getState().clearSettings();
+    expect(useSettingsStore.getState().loadedAt).toBeNull();
+  });
+});

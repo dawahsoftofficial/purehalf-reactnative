@@ -1,5 +1,11 @@
 import { create } from 'zustand';
 
+import {
+  normalizeSmsOtpProvider,
+  SMS_OTP_PROVIDER_SETTING_KEY,
+  type SmsOtpProvider,
+} from '../services/api/otp-route';
+
 // Type definitions for the settings API response
 type AuthenticationMethod = {
   is_phone: number;
@@ -175,7 +181,8 @@ type SettingValue =
   | MaintenanceMode
   | PackagesAndEntitlements
   | RatingPromptConfig
-  | AppLink[];
+  | AppLink[]
+  | string;
 
 type SettingItem = {
   title: string;
@@ -194,6 +201,8 @@ type SettingsResponse = {
 type SettingsState = {
   settings: SettingsResponse | null;
   loaded: boolean;
+  /** Epoch ms of the last setSettings, so callers can judge freshness. */
+  loadedAt: number | null;
   setSettings: (settings: SettingsResponse) => void;
   clearSettings: () => void;
   getAuthenticationMethod: () => AuthenticationMethod | null;
@@ -215,19 +224,21 @@ type SettingsState = {
   getAppLinks: () => AppLink[] | null;
   getRatingPrompt: () => RatingPromptConfig;
   getMaintenanceMode: () => MaintenanceMode;
+  getSmsOtpProvider: () => SmsOtpProvider;
   getSettingByKey: <T extends SettingValue>(key: string) => T | null;
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: null,
   loaded: false,
+  loadedAt: null,
 
   setSettings: (settings: SettingsResponse) => {
-    set({ settings, loaded: true });
+    set({ settings, loaded: true, loadedAt: Date.now() });
   },
 
   clearSettings: () => {
-    set({ settings: null, loaded: false });
+    set({ settings: null, loaded: false, loadedAt: null });
   },
 
   getAuthenticationMethod: () => {
@@ -345,6 +356,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       ...(value ?? {}),
       enabled: value?.enabled === true,
     };
+  },
+
+  // 'firebase' unless the admin switched phone sign-in codes to SendPK.
+  getSmsOtpProvider: () => {
+    const state = get();
+    return normalizeSmsOtpProvider(
+      state.getSettingByKey<string>(SMS_OTP_PROVIDER_SETTING_KEY)
+    );
   },
 
   getSettingByKey: <T extends SettingValue>(key: string) => {
