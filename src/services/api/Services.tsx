@@ -27,6 +27,7 @@ import BaseUrl from './BaseUrl';
 import EndPoints from './EndPoints';
 import { Api } from './Middleware';
 import { buildPhoneAuthPayload } from './phone-auth';
+import { verifyServerOtp } from './sms-otp';
 import type {
   CurrentUserDetail,
   GetCurrentUserDetailResponse,
@@ -568,16 +569,10 @@ class GApiServices {
         })
       )
         .then(async (apiRes: any) => {
-          const apiResult = apiRes?.data?.results;
-          await setData(storageKeys.USER, apiResult);
-          await setData(storageKeys.USER_TOKEN, apiRes?.data?.bearer_token);
-          if (apiResult?.banned_at && apiResult?.banned_at?.length !== 0) {
-            flashErrorMessage(
-              'You are banned and not allowed to login anymore.'
-            );
-            reject('');
-          } else {
+          if (await this.storePhoneLogin(apiRes)) {
             onLogin(apiRes?.data);
+          } else {
+            reject('');
           }
         })
         .catch((error) => {
@@ -588,6 +583,37 @@ class GApiServices {
           );
         });
     });
+  };
+
+  /**
+   * Stores the session from a phone login response (POST /authenticate or
+   * /otp/verify, same payload). Returns false, after telling the member, when
+   * the account is banned.
+   */
+  private storePhoneLogin = async (apiRes: any): Promise<boolean> => {
+    const apiResult = apiRes?.data?.results;
+    await setData(storageKeys.USER, apiResult);
+    await setData(storageKeys.USER_TOKEN, apiRes?.data?.bearer_token);
+    if (apiResult?.banned_at && apiResult?.banned_at?.length !== 0) {
+      flashErrorMessage('You are banned and not allowed to login anymore.');
+      return false;
+    }
+    return true;
+  };
+
+  /**
+   * Server SMS route: checks the code with POST /otp/verify and stores the
+   * session exactly like loginUser. Resolves with the login payload (same as
+   * /authenticate) to hand to the shared post-login handling, or null when the
+   * account is banned (already reported). Throws an SmsOtpError otherwise.
+   */
+  loginWithServerOtp = async (
+    phoneNumber: string,
+    otp: string
+  ): Promise<any | null> => {
+    const fcmToken = await this.getValidFcmToken();
+    const apiRes = await verifyServerOtp({ phoneNumber, otp, fcmToken, isIOS });
+    return (await this.storePhoneLogin(apiRes)) ? apiRes?.data : null;
   };
 
   authenticateUser = (phoneNumber: any, onLogin: any, fromOtp: boolean) => {

@@ -1,12 +1,15 @@
-import { t } from 'i18next';
+import { t, type TOptions } from 'i18next';
 
 import { FlashMessage } from '../components';
 import { LanguageKeys } from '../languages';
 
-const flashErrorMessage = (message = LanguageKeys.commonErrorMessage) => {
+const flashErrorMessage = (
+  message = LanguageKeys.commonErrorMessage,
+  options?: TOptions
+) => {
   return FlashMessage({
     type: 'danger',
-    message: t(message),
+    message: options ? t(message, options) : t(message),
   });
 };
 
