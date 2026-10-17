@@ -4,7 +4,13 @@ import {
   getAuth,
   onAuthStateChanged,
 } from '@react-native-firebase/auth';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Keyboard, StyleSheet, View } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,12 +32,19 @@ import {
   StorageManager,
   useGlobalContext,
 } from '../../services';
+import { sendServerOtp } from '../../services/api/sms-otp';
 import FirebaseServices from '../../services/firebase/Firebase';
 import { useSettingsStore } from '../../stores';
 import { flushPrimerAnswers } from '../signupPrimer/commit-primer';
 import OtpHeader from './components/otp-header';
 import OtpInput from './components/otp-input';
 import ResendTimer from './components/resend-timer';
+import {
+  initialResendSeconds,
+  otpScreenRoute,
+  resendServerCode,
+} from './server-otp-flow';
+import { serverVerifyFailure } from './sms-otp-messages';
 
 const firebaseApp = getApp();
 const auth = getAuth(firebaseApp);
@@ -61,6 +74,10 @@ type OtpProps = {
     params?: {
       phoneNumber?: string;
       phoneNumberFirebaseRes?: unknown;
+      /** 'server' when the code was sent by our server (SendPK). */
+      otpRoute?: 'server' | 'firebase';
+      /** Seconds until the server allows a resend. */
+      resendIn?: number;
     };
   };
   navigation: {
@@ -86,6 +103,13 @@ const Otp = (props: OtpProps) => {
   const [phoneNumberFirebaseRes, setPhoneNumberFirebaseRes] = useState(
     props?.route?.params?.phoneNumberFirebaseRes
   );
+  // Server SMS route vs Firebase phone auth. Can switch to Firebase if the
+  // admin turns server codes off while the member is on this screen.
+  const [otpRoute, setOtpRoute] = useState(() =>
+    otpScreenRoute(props?.route?.params?.otpRoute, from)
+  );
+  const isServerRoute = otpRoute === 'server';
+  const verifyingRef = useRef(false);
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
   const [continueLoader, setContinueLoader] = useState(false);
   const [continueLoaderMessage, setContinueLoaderMessage] =
@@ -93,7 +117,9 @@ const Otp = (props: OtpProps) => {
 
   const CELL_COUNT = 6;
   const [value, setValue] = useState('');
-  const [seconds, setSeconds] = useState(30);
+  const [seconds, setSeconds] = useState(() =>
+    initialResendSeconds(otpRoute, props?.route?.params?.resendIn)
+  );
   const [timerActive, setTimerActive] = useState(true);
 
   const skipPaywall = useSettingsStore().getSkipSignupMembershipPaywall();
@@ -162,66 +188,85 @@ const Otp = (props: OtpProps) => {
     [currentUser, navigateAfterLogin, updateCurrentUser]
   );
 
-  const onOTPVerified = useCallback(async () => {
-    if (!currentUser) {
-      ApiServices.loginUser(phoneNumber, (userObj: { results?: User }) =>
-        onLoggedIn(userObj)
-      );
-    } else {
-      try {
-        if (currentUser?.id) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          setRevenueCat(currentUser.id as any);
+  /**
+   * Shared post-login handling for both routes. The server route passes the
+   * /otp/verify payload (same shape as /authenticate); the Firebase route
+   * passes nothing and logs in with the Firebase ID token here.
+   */
+  const onOTPVerified = useCallback(
+    async (loginResponse?: { results?: User }) => {
+      if (!currentUser) {
+        if (loginResponse) {
+          onLoggedIn(loginResponse);
+          return;
         }
-        const membershipRes = (await ApiServices.getMembershipStatus()) as {
-          membership_expiry?: string | null;
-          membership_status?: number;
-        } | null;
+        ApiServices.loginUser(phoneNumber, (userObj: { results?: User }) =>
+          onLoggedIn(userObj)
+        );
+      } else {
+        try {
+          if (currentUser?.id) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            setRevenueCat(currentUser.id as any);
+          }
+          const membershipRes = (await ApiServices.getMembershipStatus()) as {
+            membership_expiry?: string | null;
+            membership_status?: number;
+          } | null;
 
-        const updatedUser: User = {
-          ...currentUser,
-          membership_expiry:
-            membershipRes?.membership_expiry ||
-            currentUser.membership_expiry ||
-            null,
-          membership_status:
-            membershipRes || currentUser.membership_status ? 1 : 0,
-        };
+          const updatedUser: User = {
+            ...currentUser,
+            membership_expiry:
+              membershipRes?.membership_expiry ||
+              currentUser.membership_expiry ||
+              null,
+            membership_status:
+              membershipRes || currentUser.membership_status ? 1 : 0,
+          };
 
-        updateCurrentUser(updatedUser);
-        await setData(storageKeys.USER, updatedUser);
-        setContinueLoader(false);
-        navigateAfterLogin(updatedUser);
-      } catch (error) {
-        console.error('Error in onOTPVerified:', error);
-        setContinueLoader(false);
+          updateCurrentUser(updatedUser);
+          await setData(storageKeys.USER, updatedUser);
+          setContinueLoader(false);
+          navigateAfterLogin(updatedUser);
+        } catch (error) {
+          console.error('Error in onOTPVerified:', error);
+          setContinueLoader(false);
+        }
       }
-    }
-  }, [
-    currentUser,
-    phoneNumber,
-    onLoggedIn,
-    navigateAfterLogin,
-    setData,
-    storageKeys.USER,
-    updateCurrentUser,
-  ]);
+    },
+    [
+      currentUser,
+      phoneNumber,
+      onLoggedIn,
+      navigateAfterLogin,
+      setData,
+      storageKeys.USER,
+      updateCurrentUser,
+    ]
+  );
+
+  const markLoggedIn = useCallback(() => {
+    FirebaseServices.handleIsLoggedIn(true);
+    flashSuccessMessage(LanguageKeys.loggedInSuccessfully);
+  }, []);
 
   const onAuthStateChangedFirebase = useCallback(
     (user: FirebaseAuthTypes.User | null) => {
       if (user && from !== 'AccountDeletion' && phoneNumber) {
-        FirebaseServices.handleIsLoggedIn(true);
-        flashSuccessMessage(LanguageKeys.loggedInSuccessfully);
+        markLoggedIn();
         ApiServices.authenticateUser(phoneNumber, () => onOTPVerified(), true);
       }
     },
-    [from, phoneNumber, onOTPVerified]
+    [from, phoneNumber, onOTPVerified, markLoggedIn]
   );
 
   useEffect(() => {
+    // The server route never signs in to Firebase; a leftover Firebase user
+    // must not trigger a Firebase-token login here.
+    if (isServerRoute) return;
     const subscriber = onAuthStateChanged(auth, onAuthStateChangedFirebase);
     return () => subscriber();
-  }, [onAuthStateChangedFirebase]);
+  }, [isServerRoute, onAuthStateChangedFirebase]);
 
   useEffect(() => {
     const keyboardDidShowListener = Keyboard.addListener(
@@ -300,10 +345,55 @@ const Otp = (props: OtpProps) => {
     [purposeOfLeaving, otpType, phoneNumberFirebaseRes, props.navigation]
   );
 
+  const restartResendTimer = useCallback((nextSeconds: number) => {
+    setSeconds(nextSeconds);
+    setTimerActive(nextSeconds > 0);
+  }, []);
+
+  const verifyServerCode = useCallback(
+    async (code: string) => {
+      if (verifyingRef.current) return;
+      verifyingRef.current = true;
+      setContinueLoaderMessage('Verifying...');
+      setContinueLoader(true);
+      try {
+        const loginResponse = await ApiServices.loginWithServerOtp(
+          phoneNumber,
+          code
+        );
+        if (!loginResponse) {
+          // Banned: loginWithServerOtp already told the member.
+          hideContinueLoader();
+          return;
+        }
+        markLoggedIn();
+        await onOTPVerified(loginResponse);
+      } catch (error) {
+        console.log('Error verifying server code:', error);
+        const failure = serverVerifyFailure(error);
+        flashErrorMessage(failure.key, failure.options);
+        if (failure.clearCode) setValue('');
+        if (failure.allowResendNow) restartResendTimer(0);
+        hideContinueLoader();
+      } finally {
+        verifyingRef.current = false;
+      }
+    },
+    [
+      phoneNumber,
+      markLoggedIn,
+      onOTPVerified,
+      hideContinueLoader,
+      restartResendTimer,
+    ]
+  );
+
   const onContinuePress = useCallback(async () => {
     const code = value;
     if (from === 'AccountDeletion') {
       await handleAccountDeletion(code);
+    } else if (isServerRoute) {
+      await verifyServerCode(code);
     } else {
       setContinueLoaderMessage('Verifying...');
       setContinueLoader(true);
@@ -318,12 +408,46 @@ const Otp = (props: OtpProps) => {
     value,
     from,
     handleAccountDeletion,
+    isServerRoute,
+    verifyServerCode,
     phoneNumberFirebaseRes,
     hideContinueLoader,
   ]);
 
+  const onResendServerPress = useCallback(async () => {
+    const outcome = await resendServerCode(phoneNumber, sendServerOtp);
+    switch (outcome.kind) {
+      case 'sent':
+        setValue('');
+        restartResendTimer(outcome.resendIn);
+        flashSuccessMessage(LanguageKeys.codeResent);
+        return;
+      case 'wait':
+        restartResendTimer(outcome.resendIn);
+        flashErrorMessage(outcome.message.key, outcome.message.options);
+        return;
+      case 'error':
+        flashErrorMessage(outcome.message.key, outcome.message.options);
+        return;
+      case 'firebase': {
+        // Server codes were switched off meanwhile: continue on Firebase.
+        const res = await Firebase.sendVerificationCode(phoneNumber);
+        setPhoneNumberFirebaseRes(res);
+        setOtpRoute('firebase');
+        setValue('');
+        restartResendTimer(30);
+        flashSuccessMessage(LanguageKeys.codeResent);
+        return;
+      }
+    }
+  }, [phoneNumber, restartResendTimer]);
+
   const onResendPress = useCallback(async () => {
     try {
+      if (isServerRoute) {
+        await onResendServerPress();
+        return;
+      }
       if (otpType === 'email') {
         await ApiServices.sendOTPForAccountDelete({});
       } else {
@@ -336,7 +460,7 @@ const Otp = (props: OtpProps) => {
     } catch (error) {
       console.error('Error resending code:', error);
     }
-  }, [otpType, phoneNumber]);
+  }, [isServerRoute, onResendServerPress, otpType, phoneNumber]);
 
   useEffect(() => {
     if (value.length === CELL_COUNT) {

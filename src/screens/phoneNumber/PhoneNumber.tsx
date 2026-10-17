@@ -21,6 +21,14 @@ import {
 } from '../../services';
 import { StorageManager, useGlobalContext } from '../../services';
 import { ApiServices } from '../../services/api';
+import {
+  isSettingsStale,
+  resolveSmsOtpProvider,
+  type SmsOtpProvider,
+} from '../../services/api/otp-route';
+import { sendServerOtp } from '../../services/api/sms-otp';
+import { type SettingsResponse, useSettingsStore } from '../../stores';
+import { startPhoneLogin } from '../otp/server-otp-flow';
 import Data from '../profile/Data';
 import PhoneHeader from './components/phone-header';
 import PhoneLogoSection from './components/phone-logo-section';
@@ -184,7 +192,59 @@ function PhoneNumber({ navigation }: PhoneNumberProps) {
     return true;
   }, [selectedCountry.dial_code, phoneNumber.length]);
 
-  const onContinuePress = useCallback(() => {
+  // Re-fetches /settings into the store and returns the SMS code provider.
+  const refreshSmsOtpProvider = useCallback(async () => {
+    const response = (await ApiServices.getAppSettings()) as SettingsResponse;
+    useSettingsStore.getState().setSettings(response);
+    return useSettingsStore.getState().getSmsOtpProvider();
+  }, []);
+
+  // Which service sends the code: the cached /settings value while fresh,
+  // else a quick refresh; Firebase whenever nothing can be read.
+  const resolveProvider = useCallback((): Promise<SmsOtpProvider> => {
+    const state = useSettingsStore.getState();
+    return resolveSmsOtpProvider({
+      cached: state.loaded ? state.getSmsOtpProvider() : null,
+      fresh: state.loaded && !isSettingsStale(state.loadedAt, Date.now()),
+      refresh: refreshSmsOtpProvider,
+    });
+  }, [refreshSmsOtpProvider]);
+
+  // Warm the settings while the member types, so Continue rarely waits.
+  useEffect(() => {
+    const { loaded, loadedAt } = useSettingsStore.getState();
+    if (loaded && !isSettingsStale(loadedAt, Date.now())) return;
+    refreshSmsOtpProvider().catch((error) => {
+      console.log('Error refreshing app settings:', error);
+    });
+  }, [refreshSmsOtpProvider]);
+
+  const startFirebaseLogin = useCallback(
+    (phoneNumberWithCode: string) => {
+      ApiServices.authenticateUser(
+        phoneNumberWithCode,
+        (currentUser: User) => onLoggedIn(currentUser),
+        false
+      )
+        .then((res: unknown) => {
+          const response = res as { verificationRes?: unknown };
+          if (response?.verificationRes) {
+            setLoading(false);
+            navigation.navigate('Otp', {
+              phoneNumber: phoneNumberWithCode,
+              phoneNumberFirebaseRes: response.verificationRes,
+            });
+          }
+        })
+        .catch((error) => {
+          console.error('Error in authentication:', error);
+          hideLoading();
+        });
+    },
+    [onLoggedIn, hideLoading, navigation]
+  );
+
+  const onContinuePress = useCallback(async () => {
     if (!validatePhoneNumber()) {
       return flashErrorMessage(LanguageKeys.invalidPhoneNumber);
     }
@@ -194,30 +254,32 @@ function PhoneNumber({ navigation }: PhoneNumberProps) {
       selectedCountry.dial_code +
       (phoneNumber[0] === '0' ? phoneNumber.slice(1) : phoneNumber);
 
-    ApiServices.authenticateUser(
-      phoneNumberWithCode,
-      (currentUser: User) => onLoggedIn(currentUser),
-      false
-    )
-      .then((res: unknown) => {
-        const response = res as { verificationRes?: unknown };
-        if (response?.verificationRes) {
-          setLoading(false);
-          navigation.navigate('Otp', {
-            phoneNumber: phoneNumberWithCode,
-            phoneNumberFirebaseRes: response.verificationRes,
-          });
-        }
-      })
-      .catch((error) => {
-        console.error('Error in authentication:', error);
-        hideLoading();
+    const start = await startPhoneLogin(phoneNumberWithCode, {
+      resolveProvider,
+      send: sendServerOtp,
+    });
+
+    if (start.route === 'firebase') {
+      startFirebaseLogin(phoneNumberWithCode);
+      return;
+    }
+
+    hideLoading();
+    if (start.route === 'server') {
+      navigation.navigate('Otp', {
+        phoneNumber: phoneNumberWithCode,
+        otpRoute: 'server',
+        resendIn: start.resendIn,
       });
+    } else {
+      flashErrorMessage(start.message.key, start.message.options);
+    }
   }, [
     validatePhoneNumber,
     selectedCountry.dial_code,
     phoneNumber,
-    onLoggedIn,
+    resolveProvider,
+    startFirebaseLogin,
     hideLoading,
     navigation,
   ]);
