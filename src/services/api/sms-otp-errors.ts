@@ -28,11 +28,21 @@ export class SmsOtpError extends Error {
   resendIn?: number;
   /** Wrong-code attempts left before the code is burned (OTP_INVALID). */
   attemptsLeft?: number;
+  /** Seconds until requests are allowed again (OTP_RATE_LIMITED). */
+  retryAfter?: number;
+  /** The server's own text, when it sent one (shown for BANNED). */
+  serverMessage?: string;
 
   constructor(
     code: SmsOtpErrorCode,
     message: string,
-    extra: { status?: number; resendIn?: number; attemptsLeft?: number } = {}
+    extra: {
+      status?: number;
+      resendIn?: number;
+      attemptsLeft?: number;
+      retryAfter?: number;
+      serverMessage?: string;
+    } = {}
   ) {
     super(message);
     this.name = 'SmsOtpError';
@@ -40,6 +50,8 @@ export class SmsOtpError extends Error {
     this.status = extra.status;
     this.resendIn = extra.resendIn;
     this.attemptsLeft = extra.attemptsLeft;
+    this.retryAfter = extra.retryAfter;
+    this.serverMessage = extra.serverMessage;
     // Keep instanceof working when compiled down to ES5-style classes.
     Object.setPrototypeOf(this, SmsOtpError.prototype);
   }
@@ -80,6 +92,19 @@ export const resultsField = (results: unknown, field: string): unknown =>
     ? (results as Record<string, unknown>)[field]
     : undefined;
 
+// axios lower-cases header names; AxiosHeaders also exposes get().
+const headerValue = (headers: unknown, name: string): unknown => {
+  if (!headers || typeof headers !== 'object') return undefined;
+  const h = headers as Record<string, unknown> & {
+    get?: (key: string) => unknown;
+  };
+  if (typeof h.get === 'function') {
+    const value = h.get(name);
+    if (value !== undefined && value !== null) return value;
+  }
+  return h[name] ?? h[name.replace(/(^|-)([a-z])/g, (m) => m.toUpperCase())];
+};
+
 export function toSmsOtpError(error: unknown): SmsOtpError {
   if (error instanceof SmsOtpError) {
     return error;
@@ -89,7 +114,11 @@ export function toSmsOtpError(error: unknown): SmsOtpError {
     | {
         isAxiosError?: unknown;
         code?: unknown;
-        response?: { status?: number; data?: Record<string, unknown> | null };
+        response?: {
+          status?: number;
+          data?: Record<string, unknown> | null;
+          headers?: unknown;
+        };
       }
     | null
     | undefined;
@@ -111,14 +140,17 @@ export function toSmsOtpError(error: unknown): SmsOtpError {
   const status = response.status;
   const data =
     response.data && typeof response.data === 'object' ? response.data : {};
-  const message =
-    nonEmptyString(data.results) ??
-    nonEmptyString(data.message) ??
-    GENERIC_MESSAGE;
+  const serverMessage =
+    nonEmptyString(data.results) ?? nonEmptyString(data.message) ?? undefined;
+  const message = serverMessage ?? GENERIC_MESSAGE;
   const extra = {
     status,
+    serverMessage,
     resendIn: nonNegativeInt(resultsField(data.results, 'resend_in')),
     attemptsLeft: nonNegativeInt(resultsField(data.results, 'attempts_left')),
+    retryAfter:
+      nonNegativeInt(resultsField(data.results, 'retry_after')) ??
+      nonNegativeInt(headerValue(response.headers, 'retry-after')),
   };
 
   const serverCode = nonEmptyString(data.error_code);
@@ -126,7 +158,8 @@ export function toSmsOtpError(error: unknown): SmsOtpError {
     return new SmsOtpError(serverCode as SmsOtpErrorCode, message, extra);
   }
 
-  // Suppressed / banned numbers get the same 401/403 /authenticate returns.
+  // Suppressed / banned numbers get the same 401 (no error_code) that
+  // /authenticate returns; 403 is treated the same way.
   if (status === 401 || status === 403) {
     return new SmsOtpError('BANNED', message, extra);
   }

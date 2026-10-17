@@ -61,6 +61,31 @@ describe('smsOtpErrorMessage', () => {
   });
 });
 
+describe('smsOtpErrorMessage (as-built server responses)', () => {
+  it('shows the server text for a banned / suppressed number', () => {
+    expect(
+      smsOtpErrorMessage(
+        err('BANNED', { status: 401, serverMessage: 'You are banned.' })
+      )
+    ).toEqual({ key: 'accountSuspended', text: 'You are banned.' });
+  });
+
+  it('shows the wait for OTP_RATE_LIMITED with retry_after', () => {
+    expect(
+      smsOtpErrorMessage(err('OTP_RATE_LIMITED', { retryAfter: 45 }))
+    ).toEqual({
+      key: 'smsOtpErrorRateLimitedSeconds',
+      options: { seconds: 45 },
+    });
+    expect(
+      smsOtpErrorMessage(err('OTP_RATE_LIMITED', { retryAfter: 3500 }))
+    ).toEqual({
+      key: 'smsOtpErrorRateLimitedMinutes',
+      options: { minutes: 59 },
+    });
+  });
+});
+
 describe('serverVerifyFailure', () => {
   it('clears a wrong code but keeps the countdown', () => {
     expect(

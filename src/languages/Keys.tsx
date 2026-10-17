@@ -771,6 +771,8 @@ const Keys = {
   smsOtpErrorRateLimited: 'smsOtpErrorRateLimited',
   smsOtpErrorSmsFailed: 'smsOtpErrorSmsFailed',
   smsOtpErrorNetwork: 'smsOtpErrorNetwork',
+  smsOtpErrorRateLimitedSeconds: 'smsOtpErrorRateLimitedSeconds',
+  smsOtpErrorRateLimitedMinutes: 'smsOtpErrorRateLimitedMinutes',
 };
 
 export default Keys;

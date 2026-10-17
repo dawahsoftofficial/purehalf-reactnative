@@ -757,6 +757,8 @@
     "smsOtpErrorResendTooSoon": "Naya code mangwane se pehle meharbani kar ke {{seconds}} second intezar karein.",
     "smsOtpErrorRateLimited": "Bohat zyada codes mangwaye gaye hain. Thori dair baad dobara koshish karein.",
     "smsOtpErrorSmsFailed": "Hum abhi SMS nahi bhej sake. Chand minute baad dobara koshish karein.",
-    "smsOtpErrorNetwork": "Network ka masla hai. Apna connection check kar ke dobara koshish karein."
+    "smsOtpErrorNetwork": "Network ka masla hai. Apna connection check kar ke dobara koshish karein.",
+    "smsOtpErrorRateLimitedSeconds": "Bohat zyada koshishein ho gayi hain. {{seconds}} second baad dobara koshish karein.",
+    "smsOtpErrorRateLimitedMinutes": "Bohat zyada koshishein ho gayi hain. {{minutes}} minute baad dobara koshish karein."
   }
 }

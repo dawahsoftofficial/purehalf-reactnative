@@ -28,6 +28,7 @@ import {
 } from '../../services/api/otp-route';
 import { sendServerOtp } from '../../services/api/sms-otp';
 import { type SettingsResponse, useSettingsStore } from '../../stores';
+import { flashSmsOtpMessage } from '../otp/flash-sms-otp-message';
 import { startPhoneLogin } from '../otp/server-otp-flow';
 import Data from '../profile/Data';
 import PhoneHeader from './components/phone-header';
@@ -272,7 +273,7 @@ function PhoneNumber({ navigation }: PhoneNumberProps) {
         resendIn: start.resendIn,
       });
     } else {
-      flashErrorMessage(start.message.key, start.message.options);
+      flashSmsOtpMessage(start.message);
     }
   }, [
     validatePhoneNumber,

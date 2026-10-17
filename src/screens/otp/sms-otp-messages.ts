@@ -9,6 +9,11 @@ export type SmsOtpMessage = {
   /** i18n key; pass it with `options` to `t()` / flashErrorMessage. */
   key: string;
   options?: Record<string, number>;
+  /**
+   * The server's own wording, shown instead of `key` when present. Only used
+   * for suppressed / banned numbers, matching how /authenticate reports them.
+   */
+  text?: string;
 };
 
 // Localized copy per error code. Codes not listed (UNKNOWN, PROVIDER_DISABLED
@@ -34,6 +39,24 @@ export function smsOtpErrorMessage(error: unknown): SmsOtpMessage {
       : {
           key: LanguageKeys.smsOtpErrorInvalidCodeAttempts,
           options: { attempts: err.attemptsLeft },
+        };
+  }
+
+  if (err.code === 'BANNED') {
+    return err.serverMessage
+      ? { key: LanguageKeys.accountSuspended, text: err.serverMessage }
+      : { key: LanguageKeys.accountSuspended };
+  }
+
+  if (err.code === 'OTP_RATE_LIMITED' && err.retryAfter) {
+    return err.retryAfter < 120
+      ? {
+          key: LanguageKeys.smsOtpErrorRateLimitedSeconds,
+          options: { seconds: err.retryAfter },
+        }
+      : {
+          key: LanguageKeys.smsOtpErrorRateLimitedMinutes,
+          options: { minutes: Math.ceil(err.retryAfter / 60) },
         };
   }
 

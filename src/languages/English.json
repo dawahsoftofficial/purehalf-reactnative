@@ -777,6 +777,8 @@
     "smsOtpErrorResendTooSoon": "Please wait {{seconds}} seconds before requesting a new code.",
     "smsOtpErrorRateLimited": "Too many code requests. Please try again later.",
     "smsOtpErrorSmsFailed": "We couldn't send the SMS right now. Please try again in a few minutes.",
-    "smsOtpErrorNetwork": "Network problem. Check your connection and try again."
+    "smsOtpErrorNetwork": "Network problem. Check your connection and try again.",
+    "smsOtpErrorRateLimitedSeconds": "Too many attempts. Please try again in {{seconds}} seconds.",
+    "smsOtpErrorRateLimitedMinutes": "Too many attempts. Please try again in {{minutes}} minutes."
   }
 }

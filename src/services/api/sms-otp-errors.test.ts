@@ -111,6 +111,77 @@ describe('toSmsOtpError', () => {
   });
 });
 
+describe('toSmsOtpError (as-built server responses)', () => {
+  it('keeps the server text for a 401 with no error_code (banned / suppressed)', () => {
+    const err = toSmsOtpError(
+      axiosError(401, {
+        message: 'Your account has been banned.',
+        error: true,
+        code: 401,
+        results: null,
+      })
+    );
+    expect(err.code).toBe('BANNED');
+    expect(err.serverMessage).toBe('Your account has been banned.');
+  });
+
+  it('reads retry_after for OTP_RATE_LIMITED', () => {
+    const err = toSmsOtpError(
+      axiosError(429, envelope('OTP_RATE_LIMITED', { retry_after: 600 }))
+    );
+    expect(err.code).toBe('OTP_RATE_LIMITED');
+    expect(err.retryAfter).toBe(600);
+  });
+
+  it('falls back to the Retry-After header', () => {
+    const err = toSmsOtpError({
+      isAxiosError: true,
+      response: {
+        status: 429,
+        data: { error_code: 'OTP_RATE_LIMITED', results: null },
+        headers: { 'retry-after': '30' },
+      },
+    });
+    expect(err.retryAfter).toBe(30);
+  });
+
+  it('reads the header through AxiosHeaders.get()', () => {
+    const err = toSmsOtpError({
+      isAxiosError: true,
+      response: {
+        status: 429,
+        data: { message: 'Too Many Attempts.' },
+        headers: {
+          get: (name: string) => (name === 'retry-after' ? 45 : null),
+        },
+      },
+    });
+    expect(err.code).toBe('OTP_RATE_LIMITED');
+    expect(err.retryAfter).toBe(45);
+  });
+
+  it('handles VALIDATION with an array of messages', () => {
+    const err = toSmsOtpError(
+      axiosError(
+        422,
+        envelope(
+          'VALIDATION',
+          ['The phone number must be a Pakistani mobile number.'],
+          'The given data was invalid.'
+        )
+      )
+    );
+    expect(err.code).toBe('VALIDATION');
+    expect(err.message).toBe('The given data was invalid.');
+  });
+
+  it('maps the 5th wrong code (429 OTP_LOCKED) to OTP_LOCKED', () => {
+    expect(
+      toSmsOtpError(axiosError(429, envelope('OTP_LOCKED', null))).code
+    ).toBe('OTP_LOCKED');
+  });
+});
+
 describe('shouldFallBackToFirebase', () => {
   it('falls back for PROVIDER_DISABLED and a missing route (404)', () => {
     expect(

@@ -39,6 +39,7 @@ import { flushPrimerAnswers } from '../signupPrimer/commit-primer';
 import OtpHeader from './components/otp-header';
 import OtpInput from './components/otp-input';
 import ResendTimer from './components/resend-timer';
+import { flashSmsOtpMessage } from './flash-sms-otp-message';
 import {
   initialResendSeconds,
   otpScreenRoute,
@@ -371,7 +372,7 @@ const Otp = (props: OtpProps) => {
       } catch (error) {
         console.log('Error verifying server code:', error);
         const failure = serverVerifyFailure(error);
-        flashErrorMessage(failure.key, failure.options);
+        flashSmsOtpMessage(failure);
         if (failure.clearCode) setValue('');
         if (failure.allowResendNow) restartResendTimer(0);
         hideContinueLoader();
@@ -424,10 +425,10 @@ const Otp = (props: OtpProps) => {
         return;
       case 'wait':
         restartResendTimer(outcome.resendIn);
-        flashErrorMessage(outcome.message.key, outcome.message.options);
+        flashSmsOtpMessage(outcome.message);
         return;
       case 'error':
-        flashErrorMessage(outcome.message.key, outcome.message.options);
+        flashSmsOtpMessage(outcome.message);
         return;
       case 'firebase': {
         // Server codes were switched off meanwhile: continue on Firebase.

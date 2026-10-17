@@ -777,6 +777,8 @@
     "smsOtpErrorResendTooSoon": "نیا کوڈ منگوانے سے پہلے براہ کرم {{seconds}} سیکنڈ انتظار کریں۔",
     "smsOtpErrorRateLimited": "بہت زیادہ کوڈ منگوائے گئے ہیں۔ براہ کرم کچھ دیر بعد دوبارہ کوشش کریں۔",
     "smsOtpErrorSmsFailed": "ہم ابھی SMS نہیں بھیج سکے۔ براہ کرم چند منٹ بعد دوبارہ کوشش کریں۔",
-    "smsOtpErrorNetwork": "نیٹ ورک کا مسئلہ ہے۔ اپنا کنکشن چیک کر کے دوبارہ کوشش کریں۔"
+    "smsOtpErrorNetwork": "نیٹ ورک کا مسئلہ ہے۔ اپنا کنکشن چیک کر کے دوبارہ کوشش کریں۔",
+    "smsOtpErrorRateLimitedSeconds": "بہت زیادہ کوششیں ہو گئی ہیں۔ براہ کرم {{seconds}} سیکنڈ بعد دوبارہ کوشش کریں۔",
+    "smsOtpErrorRateLimitedMinutes": "بہت زیادہ کوششیں ہو گئی ہیں۔ براہ کرم {{minutes}} منٹ بعد دوبارہ کوشش کریں۔"
   }
 }
