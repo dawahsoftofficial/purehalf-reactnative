@@ -769,6 +769,14 @@
     "chatReportReasonOther": "Other",
     "chatReportSent": "Thank you. Our team will review this message.",
     "chatYouBlockedMember": "You blocked {{name}}. Unblock to send messages.",
-    "chatVoiceNeedsText": "Please send a text message before voice notes."
+    "chatVoiceNeedsText": "Please send a text message before voice notes.",
+    "smsOtpErrorInvalidCode": "یہ کوڈ درست نہیں ہے۔ براہ کرم چیک کر کے دوبارہ کوشش کریں۔",
+    "smsOtpErrorInvalidCodeAttempts": "یہ کوڈ درست نہیں ہے۔ باقی کوششیں: {{attempts}}",
+    "smsOtpErrorExpired": "اس کوڈ کی میعاد ختم ہو گئی ہے۔ براہ کرم نیا کوڈ منگوائیں۔",
+    "smsOtpErrorLocked": "بہت زیادہ غلط کوششیں ہو گئی ہیں۔ براہ کرم نیا کوڈ منگوائیں۔",
+    "smsOtpErrorResendTooSoon": "نیا کوڈ منگوانے سے پہلے براہ کرم {{seconds}} سیکنڈ انتظار کریں۔",
+    "smsOtpErrorRateLimited": "بہت زیادہ کوڈ منگوائے گئے ہیں۔ براہ کرم کچھ دیر بعد دوبارہ کوشش کریں۔",
+    "smsOtpErrorSmsFailed": "ہم ابھی SMS نہیں بھیج سکے۔ براہ کرم چند منٹ بعد دوبارہ کوشش کریں۔",
+    "smsOtpErrorNetwork": "نیٹ ورک کا مسئلہ ہے۔ اپنا کنکشن چیک کر کے دوبارہ کوشش کریں۔"
   }
 }

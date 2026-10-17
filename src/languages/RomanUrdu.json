@@ -749,6 +749,14 @@
     "chatReportReasonOther": "Other",
     "chatReportSent": "Thank you. Our team will review this message.",
     "chatYouBlockedMember": "You blocked {{name}}. Unblock to send messages.",
-    "chatVoiceNeedsText": "Please send a text message before voice notes."
+    "chatVoiceNeedsText": "Please send a text message before voice notes.",
+    "smsOtpErrorInvalidCode": "Yeh code durust nahi hai. Meharbani kar ke check karein aur dobara koshish karein.",
+    "smsOtpErrorInvalidCodeAttempts": "Yeh code durust nahi hai. Baqi koshishein: {{attempts}}",
+    "smsOtpErrorExpired": "Is code ki muddat khatam ho gayi hai. Meharbani kar ke naya code mangwayein.",
+    "smsOtpErrorLocked": "Bohat zyada ghalat koshishein ho gayi hain. Meharbani kar ke naya code mangwayein.",
+    "smsOtpErrorResendTooSoon": "Naya code mangwane se pehle meharbani kar ke {{seconds}} second intezar karein.",
+    "smsOtpErrorRateLimited": "Bohat zyada codes mangwaye gaye hain. Thori dair baad dobara koshish karein.",
+    "smsOtpErrorSmsFailed": "Hum abhi SMS nahi bhej sake. Chand minute baad dobara koshish karein.",
+    "smsOtpErrorNetwork": "Network ka masla hai. Apna connection check kar ke dobara koshish karein."
   }
 }

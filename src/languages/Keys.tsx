@@ -763,6 +763,14 @@ const Keys = {
   chatReportSent: 'chatReportSent',
   chatYouBlockedMember: 'chatYouBlockedMember',
   chatVoiceNeedsText: 'chatVoiceNeedsText',
+  smsOtpErrorInvalidCode: 'smsOtpErrorInvalidCode',
+  smsOtpErrorInvalidCodeAttempts: 'smsOtpErrorInvalidCodeAttempts',
+  smsOtpErrorExpired: 'smsOtpErrorExpired',
+  smsOtpErrorLocked: 'smsOtpErrorLocked',
+  smsOtpErrorResendTooSoon: 'smsOtpErrorResendTooSoon',
+  smsOtpErrorRateLimited: 'smsOtpErrorRateLimited',
+  smsOtpErrorSmsFailed: 'smsOtpErrorSmsFailed',
+  smsOtpErrorNetwork: 'smsOtpErrorNetwork',
 };
 
 export default Keys;

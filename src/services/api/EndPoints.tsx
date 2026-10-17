@@ -1,5 +1,7 @@
 const EndPoints = {
   authenticate: '/authenticate',
+  otpSend: '/otp/send',
+  otpVerify: '/otp/verify',
   socialAuthenticate: '/socialite/authenticate',
   updateInfo: '/auth/update/info',
   updateDetails: '/auth/update/detail',
