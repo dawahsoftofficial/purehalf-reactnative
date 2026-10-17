@@ -168,4 +168,52 @@ describe('getSmsOtpProvider', () => {
     useSettingsStore.getState().clearSettings();
     expect(useSettingsStore.getState().loadedAt).toBeNull();
   });
+
+  const withSettings = (values: Record<string, string>) =>
+    useSettingsStore.getState().setSettings({
+      message: 'ok',
+      error: false,
+      code: 200,
+      results: Object.entries(values).map(([key, value]) => ({
+        title: key,
+        key,
+        type: 'string',
+        value,
+      })),
+    });
+
+  it('defaults the international provider to firebase when missing', () => {
+    withProvider('sendpk');
+    expect(useSettingsStore.getState().getSmsOtpIntlProvider()).toBe(
+      'firebase'
+    );
+    expect(useSettingsStore.getState().getSmsOtpProviders()).toEqual({
+      pk: 'sendpk',
+      intl: 'firebase',
+    });
+  });
+
+  it('reads bird for international numbers', () => {
+    withSettings({ sms_otp_provider_intl: 'bird' });
+    expect(useSettingsStore.getState().getSmsOtpIntlProvider()).toBe('bird');
+    expect(useSettingsStore.getState().getSmsOtpProviders()).toEqual({
+      pk: 'firebase',
+      intl: 'bird',
+    });
+  });
+
+  it('reads both settings independently', () => {
+    withSettings({ sms_otp_provider: 'sendpk', sms_otp_provider_intl: 'bird' });
+    expect(useSettingsStore.getState().getSmsOtpProviders()).toEqual({
+      pk: 'sendpk',
+      intl: 'bird',
+    });
+  });
+
+  it('treats an unknown international value as firebase', () => {
+    withSettings({ sms_otp_provider_intl: 'sendpk' });
+    expect(useSettingsStore.getState().getSmsOtpIntlProvider()).toBe(
+      'firebase'
+    );
+  });
 });

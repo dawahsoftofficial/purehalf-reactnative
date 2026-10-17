@@ -4,8 +4,9 @@
  */
 import {
   chooseOtpRoute,
+  firebaseOnlyProviders,
   type OtpRoute,
-  type SmsOtpProvider,
+  type SmsOtpProviders,
 } from '../../services/api/otp-route';
 import {
   shouldFallBackToFirebase,
@@ -29,15 +30,15 @@ export type PhoneLoginStart =
  */
 export async function startPhoneLogin(
   phoneNumber: string,
-  deps: { resolveProvider: () => Promise<SmsOtpProvider>; send: SendCode }
+  deps: { resolveProviders: () => Promise<SmsOtpProviders>; send: SendCode }
 ): Promise<PhoneLoginStart> {
-  let provider: SmsOtpProvider = 'firebase';
+  let providers: SmsOtpProviders;
   try {
-    provider = await deps.resolveProvider();
+    providers = await deps.resolveProviders();
   } catch {
-    provider = 'firebase';
+    providers = firebaseOnlyProviders();
   }
-  if (chooseOtpRoute(provider, phoneNumber) !== 'server') {
+  if (chooseOtpRoute(providers, phoneNumber) !== 'server') {
     return { route: 'firebase' };
   }
 

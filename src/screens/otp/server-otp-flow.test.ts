@@ -10,38 +10,77 @@ const PK = '+923001234567';
 const UK = '+447700900123';
 
 const sendOk = (resendIn = 60) => jest.fn().mockResolvedValue({ resendIn });
+const SENDPK_ONLY = async () => ({ pk: 'sendpk', intl: 'firebase' }) as const;
+const BIRD_ONLY = async () => ({ pk: 'firebase', intl: 'bird' }) as const;
+const FIREBASE_ONLY = async () =>
+  ({ pk: 'firebase', intl: 'firebase' }) as const;
 const sendFails = (error: unknown) => jest.fn().mockRejectedValue(error);
 
 describe('startPhoneLogin', () => {
   it('sends a server code for sendpk + a Pakistani number', async () => {
     const send = sendOk(45);
     await expect(
-      startPhoneLogin(PK, { resolveProvider: async () => 'sendpk', send })
+      startPhoneLogin(PK, { resolveProviders: SENDPK_ONLY, send })
     ).resolves.toEqual({ route: 'server', resendIn: 45 });
     expect(send).toHaveBeenCalledWith(PK);
   });
 
-  it('stays on Firebase when the provider is firebase', async () => {
+  it('stays on Firebase for a Pakistani number when its provider is firebase', async () => {
     const send = sendOk();
     await expect(
-      startPhoneLogin(PK, { resolveProvider: async () => 'firebase', send })
+      startPhoneLogin(PK, { resolveProviders: FIREBASE_ONLY, send })
     ).resolves.toEqual({ route: 'firebase' });
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('stays on Firebase for a non-Pakistani number', async () => {
+  it('stays on Firebase for an international number with sendpk only', async () => {
     const send = sendOk();
     await expect(
-      startPhoneLogin(UK, { resolveProvider: async () => 'sendpk', send })
+      startPhoneLogin(UK, { resolveProviders: SENDPK_ONLY, send })
     ).resolves.toEqual({ route: 'firebase' });
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('sends a server code for bird + an international number', async () => {
+    const send = sendOk(60);
+    await expect(
+      startPhoneLogin(UK, { resolveProviders: BIRD_ONLY, send })
+    ).resolves.toEqual({ route: 'server', resendIn: 60 });
+    expect(send).toHaveBeenCalledWith(UK);
+  });
+
+  it('keeps an international number on Firebase when its provider is firebase', async () => {
+    const send = sendOk();
+    await expect(
+      startPhoneLogin(UK, { resolveProviders: FIREBASE_ONLY, send })
+    ).resolves.toEqual({ route: 'firebase' });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('keeps a Pakistani number on Firebase when only bird is on', async () => {
+    const send = sendOk();
+    await expect(
+      startPhoneLogin(PK, { resolveProviders: BIRD_ONLY, send })
+    ).resolves.toEqual({ route: 'firebase' });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('silently falls back to Firebase when the server refuses an international number', async () => {
+    await expect(
+      startPhoneLogin(UK, {
+        resolveProviders: BIRD_ONLY,
+        send: sendFails(
+          new SmsOtpError('PROVIDER_DISABLED', 'x', { status: 409 })
+        ),
+      })
+    ).resolves.toEqual({ route: 'firebase' });
   });
 
   it('stays on Firebase when the provider cannot be read', async () => {
     const send = sendOk();
     await expect(
       startPhoneLogin(PK, {
-        resolveProvider: () => Promise.reject(new Error('offline')),
+        resolveProviders: () => Promise.reject(new Error('offline')),
         send,
       })
     ).resolves.toEqual({ route: 'firebase' });
@@ -51,7 +90,7 @@ describe('startPhoneLogin', () => {
   it('silently falls back to Firebase on PROVIDER_DISABLED', async () => {
     await expect(
       startPhoneLogin(PK, {
-        resolveProvider: async () => 'sendpk',
+        resolveProviders: SENDPK_ONLY,
         send: sendFails(
           new SmsOtpError('PROVIDER_DISABLED', 'x', { status: 409 })
         ),
@@ -62,7 +101,7 @@ describe('startPhoneLogin', () => {
   it('falls back to Firebase when the server has no /otp/send (404)', async () => {
     await expect(
       startPhoneLogin(PK, {
-        resolveProvider: async () => 'sendpk',
+        resolveProviders: SENDPK_ONLY,
         send: sendFails({
           isAxiosError: true,
           response: { status: 404, data: { message: 'Not Found' } },
@@ -74,7 +113,7 @@ describe('startPhoneLogin', () => {
   it('goes to the OTP screen when a code was sent moments ago', async () => {
     await expect(
       startPhoneLogin(PK, {
-        resolveProvider: async () => 'sendpk',
+        resolveProviders: SENDPK_ONLY,
         send: sendFails(
           new SmsOtpError('OTP_RESEND_TOO_SOON', 'x', { resendIn: 20 })
         ),
@@ -90,7 +129,7 @@ describe('startPhoneLogin', () => {
   ] as const)('reports %s instead of falling back', async (code, key) => {
     await expect(
       startPhoneLogin(PK, {
-        resolveProvider: async () => 'sendpk',
+        resolveProviders: SENDPK_ONLY,
         send: sendFails(new SmsOtpError(code, 'x')),
       })
     ).resolves.toEqual({ route: 'error', message: { key } });
@@ -122,6 +161,34 @@ describe('resendServerCode', () => {
     await expect(
       resendServerCode(PK, sendFails(new SmsOtpError('PROVIDER_DISABLED', 'x')))
     ).resolves.toEqual({ kind: 'firebase' });
+  });
+
+  it('resends to an international number', async () => {
+    const send = sendOk(60);
+    await expect(resendServerCode(UK, send)).resolves.toEqual({
+      kind: 'sent',
+      resendIn: 60,
+    });
+    expect(send).toHaveBeenCalledWith(UK);
+  });
+
+  it('switches an international number to Firebase when Bird was turned off', async () => {
+    await expect(
+      resendServerCode(UK, sendFails(new SmsOtpError('PROVIDER_DISABLED', 'x')))
+    ).resolves.toEqual({ kind: 'firebase' });
+  });
+
+  it('waits out OTP_RESEND_TOO_SOON on an international number', async () => {
+    await expect(
+      resendServerCode(
+        UK,
+        sendFails(new SmsOtpError('OTP_RESEND_TOO_SOON', 'x', { resendIn: 30 }))
+      )
+    ).resolves.toEqual({
+      kind: 'wait',
+      resendIn: 30,
+      message: { key: 'smsOtpErrorResendTooSoon', options: { seconds: 30 } },
+    });
   });
 
   it('reports other failures', async () => {

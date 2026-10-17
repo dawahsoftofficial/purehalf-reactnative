@@ -75,7 +75,7 @@ type OtpProps = {
     params?: {
       phoneNumber?: string;
       phoneNumberFirebaseRes?: unknown;
-      /** 'server' when the code was sent by our server (SendPK). */
+      /** 'server' when the code was sent by our server (SendPK or Bird). */
       otpRoute?: 'server' | 'firebase';
       /** Seconds until the server allows a resend. */
       resendIn?: number;

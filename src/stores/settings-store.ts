@@ -1,9 +1,13 @@
 import { create } from 'zustand';
 
 import {
+  normalizeSmsOtpIntlProvider,
   normalizeSmsOtpProvider,
+  SMS_OTP_PROVIDER_INTL_SETTING_KEY,
   SMS_OTP_PROVIDER_SETTING_KEY,
+  type SmsOtpIntlProvider,
   type SmsOtpProvider,
+  type SmsOtpProviders,
 } from '../services/api/otp-route';
 
 // Type definitions for the settings API response
@@ -225,6 +229,8 @@ type SettingsState = {
   getRatingPrompt: () => RatingPromptConfig;
   getMaintenanceMode: () => MaintenanceMode;
   getSmsOtpProvider: () => SmsOtpProvider;
+  getSmsOtpIntlProvider: () => SmsOtpIntlProvider;
+  getSmsOtpProviders: () => SmsOtpProviders;
   getSettingByKey: <T extends SettingValue>(key: string) => T | null;
 };
 
@@ -358,12 +364,28 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     };
   },
 
-  // 'firebase' unless the admin switched phone sign-in codes to SendPK.
+  // +92 numbers: 'firebase' unless the admin switched codes to SendPK.
   getSmsOtpProvider: () => {
     const state = get();
     return normalizeSmsOtpProvider(
       state.getSettingByKey<string>(SMS_OTP_PROVIDER_SETTING_KEY)
     );
+  },
+
+  // Non-+92 numbers: 'firebase' unless the admin switched codes to Bird.
+  getSmsOtpIntlProvider: () => {
+    const state = get();
+    return normalizeSmsOtpIntlProvider(
+      state.getSettingByKey<string>(SMS_OTP_PROVIDER_INTL_SETTING_KEY)
+    );
+  },
+
+  getSmsOtpProviders: () => {
+    const state = get();
+    return {
+      pk: state.getSmsOtpProvider(),
+      intl: state.getSmsOtpIntlProvider(),
+    };
   },
 
   getSettingByKey: <T extends SettingValue>(key: string) => {

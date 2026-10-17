@@ -1,6 +1,7 @@
 /**
- * Server-sent SMS sign-in codes (SendPK), the alternative to Firebase phone
- * auth for +92 numbers. See otp-route.ts for when this route is used.
+ * Server-sent sign-in codes (SendPK for +92 numbers, Bird for international
+ * numbers), the alternative to Firebase phone auth. See otp-route.ts for when
+ * this route is used.
  *
  *   POST /otp/send   { phone_number }                 -> { expires_in, resend_in, length }
  *   POST /otp/verify { phone_number, otp, fcm_token?, device_type? }

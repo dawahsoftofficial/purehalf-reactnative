@@ -23,8 +23,8 @@ import { StorageManager, useGlobalContext } from '../../services';
 import { ApiServices } from '../../services/api';
 import {
   isSettingsStale,
-  resolveSmsOtpProvider,
-  type SmsOtpProvider,
+  resolveSmsOtpProviders,
+  type SmsOtpProviders,
 } from '../../services/api/otp-route';
 import { sendServerOtp } from '../../services/api/sms-otp';
 import { type SettingsResponse, useSettingsStore } from '../../stores';
@@ -193,32 +193,33 @@ function PhoneNumber({ navigation }: PhoneNumberProps) {
     return true;
   }, [selectedCountry.dial_code, phoneNumber.length]);
 
-  // Re-fetches /settings into the store and returns the SMS code provider.
-  const refreshSmsOtpProvider = useCallback(async () => {
+  // Re-fetches /settings into the store and returns the SMS code providers
+  // (+92 and international).
+  const refreshSmsOtpProviders = useCallback(async () => {
     const response = (await ApiServices.getAppSettings()) as SettingsResponse;
     useSettingsStore.getState().setSettings(response);
-    return useSettingsStore.getState().getSmsOtpProvider();
+    return useSettingsStore.getState().getSmsOtpProviders();
   }, []);
 
-  // Which service sends the code: the cached /settings value while fresh,
+  // Which service sends the code: the cached /settings values while fresh,
   // else a quick refresh; Firebase whenever nothing can be read.
-  const resolveProvider = useCallback((): Promise<SmsOtpProvider> => {
+  const resolveProviders = useCallback((): Promise<SmsOtpProviders> => {
     const state = useSettingsStore.getState();
-    return resolveSmsOtpProvider({
-      cached: state.loaded ? state.getSmsOtpProvider() : null,
+    return resolveSmsOtpProviders({
+      cached: state.loaded ? state.getSmsOtpProviders() : null,
       fresh: state.loaded && !isSettingsStale(state.loadedAt, Date.now()),
-      refresh: refreshSmsOtpProvider,
+      refresh: refreshSmsOtpProviders,
     });
-  }, [refreshSmsOtpProvider]);
+  }, [refreshSmsOtpProviders]);
 
   // Warm the settings while the member types, so Continue rarely waits.
   useEffect(() => {
     const { loaded, loadedAt } = useSettingsStore.getState();
     if (loaded && !isSettingsStale(loadedAt, Date.now())) return;
-    refreshSmsOtpProvider().catch((error) => {
+    refreshSmsOtpProviders().catch((error) => {
       console.log('Error refreshing app settings:', error);
     });
-  }, [refreshSmsOtpProvider]);
+  }, [refreshSmsOtpProviders]);
 
   const startFirebaseLogin = useCallback(
     (phoneNumberWithCode: string) => {
@@ -256,7 +257,7 @@ function PhoneNumber({ navigation }: PhoneNumberProps) {
       (phoneNumber[0] === '0' ? phoneNumber.slice(1) : phoneNumber);
 
     const start = await startPhoneLogin(phoneNumberWithCode, {
-      resolveProvider,
+      resolveProviders,
       send: sendServerOtp,
     });
 
@@ -279,7 +280,7 @@ function PhoneNumber({ navigation }: PhoneNumberProps) {
     validatePhoneNumber,
     selectedCountry.dial_code,
     phoneNumber,
-    resolveProvider,
+    resolveProviders,
     startFirebaseLogin,
     hideLoading,
     navigation,
